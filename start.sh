@@ -37,6 +37,12 @@ fi
 
 mkdir -p .local/consume
 
+# umh-core runs as uid 1000 and must own its /data dir; docker would otherwise
+# auto-create it root-owned and the container crash-loops with
+# "Cannot write to /data directory". (The upstream installer's builder does
+# this same chown.)
+docker run --rm -v "$PWD:/w" alpine sh -c "mkdir -p /w/umh-core-data /w/simulator-data && chown -R 1000:1000 /w/umh-core-data" >/dev/null
+
 # ── Up ──────────────────────────────────────────────────────────────────────
 say "Starting the stack (first run pulls ~3 GB and installs the ledger package — be patient)..."
 docker compose up -d 2>/tmp/umh-powerhouse-up.err || {
@@ -88,6 +94,7 @@ open_url() {
   esac
 }
 open_url "http://localhost:${PAPERLESS_PORT}"
+open_url "http://localhost:8081"
 open_url "$DRIVE_URL"
 
 cat <<SUMMARY

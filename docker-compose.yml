@@ -90,7 +90,7 @@ services:
     environment:
       # PH_REGISTRY_* both installs AND loads the package (names, not URLs).
       - PH_REGISTRY_URL=${PH_REGISTRY_URL:-https://registry.dev.vetra.io}
-      - PH_REGISTRY_PACKAGES=${UMH_LEDGER_PACKAGE:-@powerhousedao/umh-production-ledger}@${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}
+      - PH_REGISTRY_PACKAGES=${UMH_LEDGER_PACKAGE:-umh-production-ledger}@${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}
       # ---- forked paperless-sync processor (read at startup) ----
       - PAPERLESS_AI_BASE_URL=${PAPERLESS_AI_BASE_URL:-https://openrouter.ai/api/v1}
       - PAPERLESS_AI_MODEL=${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
@@ -123,7 +123,7 @@ services:
     environment:
       # defaultDrives must be the drive URL as the BROWSER sees it (host
       # port): / answers 404, /d/pl-dashboard answers 200.
-      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"${PH_REGISTRY_URL:-https://registry.dev.vetra.io}","packages":[{"packageName":"${UMH_LEDGER_PACKAGE:-@powerhousedao/umh-production-ledger}","provider":"registry","version":"${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/pl-dashboard","name":null,"icon":null}]}}}'
+      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"${PH_REGISTRY_URL:-https://registry.dev.vetra.io}","packages":[{"packageName":"${UMH_LEDGER_PACKAGE:-umh-production-ledger}","provider":"registry","version":"${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/pl-dashboard","name":null,"icon":null}]}}}'
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3001/health"]
       interval: 10s
@@ -211,9 +211,18 @@ services:
       - POSTGRES_PASSWORD=postgres
     volumes:
       - ./timescaledb-data:/var/lib/postgresql/data
-      # Runs once on a fresh volume: schema, functions, views, hypertables,
+      # Run once on a fresh volume: schema, functions, views, hypertables,
       # cost seeds (replaces the upstream builder's phase-2 SQL work).
-      - ./umh-factory/sql:/docker-entrypoint-initdb.d:ro
+      # Mounted per-file: mounting the whole directory would MASK the image's
+      # own /docker-entrypoint-initdb.d/000_install_timescaledb.sh, and
+      # without it the extension never installs and create_hypertable /
+      # time_bucket fail. The 1x- prefixes keep these sorted after that hook.
+      - ./umh-factory/sql/10-base-schema.sql:/docker-entrypoint-initdb.d/10-base-schema.sql:ro
+      - ./umh-factory/sql/11-stop-schema.sql:/docker-entrypoint-initdb.d/11-stop-schema.sql:ro
+      - ./umh-factory/sql/12-init-functions.sql:/docker-entrypoint-initdb.d/12-init-functions.sql:ro
+      - ./umh-factory/sql/13-views.sql:/docker-entrypoint-initdb.d/13-views.sql:ro
+      - ./umh-factory/sql/14-hypertables.sql:/docker-entrypoint-initdb.d/14-hypertables.sql:ro
+      - ./umh-factory/sql/15-cost-seeds.sql:/docker-entrypoint-initdb.d/15-cost-seeds.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h timescaledb"]
       interval: 10s
