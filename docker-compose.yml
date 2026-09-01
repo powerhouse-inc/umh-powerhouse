@@ -1,0 +1,277 @@
+# UMH Powerhouse demo — Paperless-ngx -> Production Ledger -> UMH factory,
+# entirely in Docker.
+#
+#   ./start.sh                          # the one command
+#   docker compose logs -f switchboard  # watch ingestion + the floor poller
+#   docker compose down                 # stop (add -v to wipe all state)
+#
+# Drop a purchase-order PDF containing the word "order" into Paperless and it
+# lands in the PL Dashboard drive as a umh/production-ledger document, fields
+# extracted by an LLM, the original scan attached. A human reviews and
+# approves it in Connect — approval creates the order on the simulated factory
+# floor, and the umh-order-poller streams machine actuals back into the
+# ledger's evidence trail.
+#
+# Pattern (images, registry packages, one-shot bootstrap, apollo patch) is
+# lifted from powerhouse-inc/paperless-billing; the factory core (simulator,
+# umh-core, TimescaleDB, pgbouncer, nginx) is vendored from a v1.4.0
+# --fixed-demo deployment of united-manufacturing-hub/umh-factory-demo under
+# ./umh-factory/ — no installer run needed, and Grafana is deliberately
+# omitted (the ledger demo does not use it).
+#
+# NOTE: shares host ports with a standalone ~/umh-factory deployment
+# (8081, 80, 502, 4840-4852, 8090). Stop that stack before starting this one.
+
+name: umh-powerhouse
+
+services:
+  # ── Paperless ─────────────────────────────────────────────────────────────
+  # Celery broker. NOT optional — document consumption (OCR) runs in a worker
+  # fed by Redis, so webserver will not start without it.
+  broker:
+    image: docker.io/library/redis:7
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:3.0.5
+    restart: unless-stopped
+    depends_on:
+      broker:
+        condition: service_healthy
+    ports:
+      - "${PAPERLESS_HOST_PORT:-8000}:8000"
+    volumes:
+      - paperless_data:/usr/src/paperless/data
+      - paperless_media:/usr/src/paperless/media
+      - ./.local/consume:/usr/src/paperless/consume
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_URL: http://localhost:${PAPERLESS_HOST_PORT:-8000}
+      PAPERLESS_TIME_ZONE: Europe/Berlin
+      PAPERLESS_OCR_LANGUAGE: deu+eng
+      PAPERLESS_DATE_PARSER_LANGUAGES: de+en
+      PAPERLESS_TIKA_ENABLED: "false"
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_ADMIN_PASSWORD: paperless
+      PAPERLESS_SECRET_KEY: local-development-only-not-a-secret
+      PAPERLESS_CONVERT_MEMORY_LIMIT: "1024"
+      PAPERLESS_WORKER_TIMEOUT: "3600"
+      PAPERLESS_AI_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+
+  # ── Powerhouse ────────────────────────────────────────────────────────────
+  # The reactor, on built-in PGlite storage. Loads the published ledger
+  # package (document models, editors, umh-order-poller processor, forked
+  # paperless-sync processor + webhook subgraph) at startup from the registry.
+  switchboard:
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.2-dev.68}
+    platform: linux/amd64 # images are amd64-only; Apple Silicon emulates
+    restart: unless-stopped
+    # TEMPORARY while PH_IMAGE_TAG <= v6.2.2-dev.68: patches a broken
+    # @apollo/subgraph before handing off to the real entrypoint. Without it
+    # every subgraph is dropped and /graphql 404s while /health stays green.
+    entrypoint: ["/bin/sh", "/patch-apollo-subgraph.sh"]
+    ports:
+      - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
+    volumes:
+      - switchboard_pglite:/app/.ph
+      - ./scripts/patch-apollo-subgraph.sh:/patch-apollo-subgraph.sh:ro
+    environment:
+      # PH_REGISTRY_* both installs AND loads the package (names, not URLs).
+      - PH_REGISTRY_URL=${PH_REGISTRY_URL:-https://registry.dev.vetra.io}
+      - PH_REGISTRY_PACKAGES=${UMH_LEDGER_PACKAGE:-@powerhousedao/umh-production-ledger}@${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}
+      # ---- forked paperless-sync processor (read at startup) ----
+      - PAPERLESS_AI_BASE_URL=${PAPERLESS_AI_BASE_URL:-https://openrouter.ai/api/v1}
+      - PAPERLESS_AI_MODEL=${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
+      - PAPERLESS_AI_API_KEY=${PAPERLESS_AI_API_KEY}
+      - PAPERLESS_WEBHOOK_SECRET=${PAPERLESS_WEBHOOK_SECRET:-local-dev-webhook-secret-not-for-production}
+      # In-network hops — Paperless and the simulator are containers here.
+      - PAPERLESS_SUBGRAPH_URL=http://switchboard:3000/graphql/paperless-webhook
+      # ---- umh-order-poller (read at startup) ----
+      - UMH_API_URL=http://machine-simulator:8081
+      - UMH_POLL_INTERVAL_MS=${UMH_POLL_INTERVAL_MS:-15000}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 3s
+      # The registry install runs BEFORE the server listens; a cold pnpm
+      # store takes minutes. 30s start_period reads as unhealthy while it is
+      # simply still installing.
+      start_period: 240s
+      retries: 5
+
+  connect:
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.2-dev.68}
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      switchboard:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${CONNECT_HOST_PORT:-3000}:3001"
+    environment:
+      # defaultDrives must be the drive URL as the BROWSER sees it (host
+      # port): / answers 404, /d/pl-dashboard answers 200.
+      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"${PH_REGISTRY_URL:-https://registry.dev.vetra.io}","packages":[{"packageName":"${UMH_LEDGER_PACKAGE:-@powerhousedao/umh-production-ledger}","provider":"registry","version":"${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/pl-dashboard","name":null,"icon":null}]}}}'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3001/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 5
+
+  # One-shot wiring, idempotent — safe on every `up`. Creates the Paperless
+  # "Purchase Order" type, the PL Dashboard drive, the Paperless Connection
+  # sync document, and the Purchase Order -> umh/production-ledger mapping.
+  bootstrap:
+    image: docker.io/library/python:3.13-alpine
+    restart: "no"
+    depends_on:
+      webserver:
+        condition: service_healthy
+      switchboard:
+        condition: service_healthy
+    volumes:
+      - ./scripts/bootstrap.py:/bootstrap.py:ro
+    environment:
+      BOOTSTRAP_PAPERLESS_URL: http://webserver:8000
+      BOOTSTRAP_REACTOR_URL: http://switchboard:3000
+      BOOTSTRAP_PAPERLESS_URL_FROM_REACTOR: http://webserver:8000
+      BOOTSTRAP_SUBGRAPH_URL: http://switchboard:3000/graphql/paperless-webhook
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_ADMIN_PASSWORD: paperless
+    command: ["python3", "/bootstrap.py"]
+
+  # ── UMH factory core (vendored --fixed-demo deployment) ─────────────────
+  machine-simulator:
+    image: dh2k/machine-simulator-2:v1.1.0
+    restart: unless-stopped
+    # 8081 is published by nginx (which injects the Create Order form fix);
+    # the container port stays reachable in-network for the poller.
+    ports:
+      - "4840-4852:4840-4852" # OPC-UA, one port per machine
+      - "502:502" # Modbus TCP
+    volumes:
+      - ./simulator-data:/app/data
+      - ./umh-factory/simulator-config:/app/config:ro
+    environment:
+      - SIMULATOR_OPCUA_HOSTNAME=machine-simulator
+      - LOG_LEVEL=${SIMULATOR_LOG_LEVEL:-info}
+      - SIMULATOR_LINE_AUTOMOTIVE_WELDING=1
+      - SIMULATOR_LINE_ELECTRONICS_THROUGH_HOLE=1
+      - SIMULATOR_LINE_WINDOW_FRAME=1
+      - SIMULATOR_LINE_METAL_PARTS_FABRICATION=1
+      - SIMULATOR_WEBHOOK_ENABLED=true
+      - SIMULATOR_WEBHOOK_TARGET_URL=http://umh-core:8090/api/v1/
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  umh-core:
+    image: management.umh.app/oci/united-manufacturing-hub/umh-core:v0.44.8
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./umh-core-data:/data
+      # The vendored config carries every dataflow, including costs-api
+      # (:8093, serving part_scrap_costs + line_downtime_costs for the
+      # settlement prefill). umh-core copies nothing — it reads /data.
+      - ./umh-factory/umh-core/config.yaml:/data/config.yaml
+    environment:
+      - AUTH_TOKEN=${UMH_AUTH_TOKEN:-PLACEHOLDER-LOCAL-DEMO-ONLY}
+      - LOCATION_0=Powerhouse
+      - LOCATION_1=DemoPlant
+      - RELEASE_CHANNEL=stable
+      - API_URL=https://management.umh.app/api
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+
+  timescaledb:
+    image: timescale/timescaledb:2.25.2-pg16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=umh
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./timescaledb-data:/var/lib/postgresql/data
+      # Runs once on a fresh volume: schema, functions, views, hypertables,
+      # cost seeds (replaces the upstream builder's phase-2 SQL work).
+      - ./umh-factory/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h timescaledb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+      - timescaledb-network
+
+  pgbouncer:
+    image: docker.io/edoburu/pgbouncer:v1.24.1-p1
+    restart: unless-stopped
+    environment:
+      - DB_NAME=umh
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=timescaledb
+      - AUTH_TYPE=scram-sha-256
+      # Upstream ships session-mode with pool 20, all permanently held by
+      # umh-core's dataflows — any additional client starves at
+      # query_wait_timeout. Sized for the dataflows + costs-api + headroom.
+      - DEFAULT_POOL_SIZE=40
+      - MAX_CLIENT_CONN=200
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h pgbouncer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - default
+      - timescaledb-network
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80" # stop-reason + costs APIs (CORS-enabled gateway)
+      - "8081:8081" # simulator UI with the Create Order form fix injected
+    volumes:
+      - ./umh-factory/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      machine-simulator:
+        condition: service_healthy
+      umh-core:
+        condition: service_started
+
+volumes:
+  redisdata:
+  paperless_data:
+  paperless_media:
+  switchboard_pglite:
+
+networks:
+  default:
+  timescaledb-network:
+    internal: true

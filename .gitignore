@@ -1,0 +1,8 @@
+# Holds PAPERLESS_AI_API_KEY. Never commit it.
+.env
+
+# Paperless's watched folder + runtime data dropped on the host.
+.local/
+umh-core-data/
+simulator-data/
+timescaledb-data/
