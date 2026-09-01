@@ -40,8 +40,7 @@ Dashboard drive in Connect.
 
 ## The demo walk
 
-1. Drop one of the sample POs (see `/demo-pdfs` in the ledger package
-  repo) into `.local/consume/`, or upload it at the Paperless UI. It must
+1. Drop one of the sample POs (bundled in [`demo-pdfs/`](demo-pdfs/)) into `.local/consume/`, or upload it at the Paperless UI. It must
    contain the word "order".
 2. After OCR, the forked paperless-sync engine extracts the commitment into a
   **DRAFT Production Ledger** in the PL Dashboard drive, with the original
