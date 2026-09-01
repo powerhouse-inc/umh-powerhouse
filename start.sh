@@ -44,7 +44,16 @@ mkdir -p .local/consume
 docker run --rm -v "$PWD:/w" alpine sh -c "mkdir -p /w/umh-core-data /w/simulator-data && chown -R 1000:1000 /w/umh-core-data" >/dev/null
 
 # ── Up ──────────────────────────────────────────────────────────────────────
-say "Starting the stack (first run pulls ~3 GB and installs the ledger package — be patient)..."
+# Cold vs warm start changes the timing story completely: a cold start pulls
+# ~3 GB of images and installs the ledger package into a fresh pnpm store
+# (minutes); a warm start reuses all of it and is typically up in ~30 seconds.
+if docker volume inspect umh-powerhouse_switchboard_pglite >/dev/null 2>&1; then
+  WAIT_HINT="typically ~30 seconds on a warm start"
+  say "Starting the stack (warm start — images and packages already in place)..."
+else
+  WAIT_HINT="up to 15 minutes on a cold start"
+  say "Starting the stack (first run: pulls ~3 GB and installs the ledger package — be patient)..."
+fi
 # `up` is retried because a dependency that CRASHES on start — rather than
 # being merely slow — aborts the whole run: compose stops waiting on
 # `condition: service_healthy` and leaves every dependent in Created, a state no
@@ -78,7 +87,7 @@ for attempt in $(seq 1 "$UP_ATTEMPTS"); do
 done
 
 # ── Wait ────────────────────────────────────────────────────────────────────
-say "Waiting for services to become healthy (up to 15 minutes on first run)..."
+say "Waiting for services to become healthy (${WAIT_HINT})..."
 DEADLINE=$(( $(date +%s) + 900 ))
 while :; do
   unhealthy=""
