@@ -45,11 +45,37 @@ docker run --rm -v "$PWD:/w" alpine sh -c "mkdir -p /w/umh-core-data /w/simulato
 
 # ── Up ──────────────────────────────────────────────────────────────────────
 say "Starting the stack (first run pulls ~3 GB and installs the ledger package — be patient)..."
-docker compose up -d 2>/tmp/umh-powerhouse-up.err || {
+# `up` is retried because a dependency that CRASHES on start — rather than
+# being merely slow — aborts the whole run: compose stops waiting on
+# `condition: service_healthy` and leaves every dependent in Created, a state no
+# restart policy will ever move (those only apply once a container has run and
+# exited). On Apple Silicon the amd64 switchboard image is emulated and Rosetta
+# intermittently miscompiles V8's JIT output ("rosetta error: target for 19-bit
+# branch is out-of-range"), killing the first start a second or two in;
+# `restart: unless-stopped` has it back within seconds. The stack is fine — it
+# just needs a second `up` to start what got skipped, which is precisely what a
+# human does by re-running this script. Do that for them.
+UP_ATTEMPTS=3
+for attempt in $(seq 1 "$UP_ATTEMPTS"); do
+  docker compose up -d 2>/tmp/umh-powerhouse-up.err && break
+
+  # A taken host port is never transient.
   grep -qi "ports are not available" /tmp/umh-powerhouse-up.err && \
     die "a host port is taken — see /tmp/umh-powerhouse-up.err ($(grep -o 'address already in use[^"]*' /tmp/umh-powerhouse-up.err | head -1))"
-  cat /tmp/umh-powerhouse-up.err >&2; exit 1
-}
+
+  # Anything that is not a dependency-start failure is a genuine error.
+  grep -qiE 'dependency failed to start|is unhealthy' /tmp/umh-powerhouse-up.err || {
+    cat /tmp/umh-powerhouse-up.err >&2; exit 1
+  }
+
+  if [ "$attempt" -eq "$UP_ATTEMPTS" ]; then
+    cat /tmp/umh-powerhouse-up.err >&2
+    die "a dependency failed to start on $UP_ATTEMPTS successive attempts, so this is not the transient emulation crash. Try: docker compose logs switchboard"
+  fi
+
+  say "  a dependency crashed on start (attempt $attempt/$UP_ATTEMPTS); its restart policy is bringing it back — retrying in 15s..."
+  sleep 15
+done
 
 # ── Wait ────────────────────────────────────────────────────────────────────
 say "Waiting for services to become healthy (up to 15 minutes on first run)..."
