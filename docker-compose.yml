@@ -101,6 +101,9 @@ services:
       # ---- umh-order-poller (read at startup) ----
       - UMH_API_URL=http://machine-simulator:8081
       - UMH_POLL_INTERVAL_MS=${UMH_POLL_INTERVAL_MS:-15000}
+      # Costs API (part_scrap_costs / line_downtime_costs via the costs-api
+      # dataflow, fronted by nginx) — the poller prices the automatic close-out.
+      - UMH_GATEWAY_URL=http://nginx:80
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
       interval: 10s

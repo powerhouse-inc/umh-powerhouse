@@ -57,8 +57,8 @@ WORKFLOW_NAME = "Powerhouse push sync"
 MAPPING_INSTRUCTIONS = """\
 This document is a customer purchase order for a manufacturing run. Fill the
 commitment ONLY, using exclusively the SET_COMMITMENT operation. Never use
-APPROVE_ORDER, OPEN_LEDGER, START_RUN, RECORD_ACTUALS_SNAPSHOT,
-COMPUTE_SETTLEMENT or SIGN_LEDGER: a human reviews and authorises the order.
+APPROVE_ORDER, OPEN_LEDGER, START_RUN, RECORD_ACTUALS_SNAPSHOT, CLOSE_OUT,
+CLOSE_EARLY, ACKNOWLEDGE or VOID_LEDGER: a human reviews and authorises the order.
 
 Field guidance:
 - customer: the buyer on the order. manufacturer: the supplier receiving it.

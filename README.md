@@ -11,7 +11,7 @@ PDF into Paperless ─OCR→ paperless-sync (LLM) ─→ DRAFT ledger + attached
                                                     │
      evidence trail ←─ umh-order-poller ←─ machine actuals (OPC-UA → UMH)
                                                     │
-                                    settle (rates from UMH cost tables) → sign
+                                    auto close-out (rates from UMH cost tables) → acknowledge
 ```
 
 
@@ -50,9 +50,11 @@ Dashboard drive in Connect.
   its UUID. **Open Ledger** freezes the baseline.
 4. The `umh-order-poller` streams machine actuals into the evidence trail
   every 15 s (progress strip, scrap ticks, quality).
-5. When the floor closes the run: **Compute Settlement** (scrap/downtime
-  rates prefilled from UMH's cost tables via the costs-api dataflow), then
-   sign both parties.
+5. When the floor reports the run complete, the poller **closes the ledger
+   out automatically**: a conformance verdict per dimension, the internal run
+   cost (rates from UMH's cost tables via the costs-api dataflow), the
+   projected contractual exposure, and a ship/hold recommendation. Controlling
+   then **acknowledges** the record.
 
 
 
