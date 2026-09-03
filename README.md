@@ -78,6 +78,10 @@ builder. Grafana is deliberately omitted — the ledger demo does not use it.
 
 ## Notes
 
+- **The factory never invents orders.** The simulator's fake ERP is run in
+  manual mode (`SIMULATOR_ERP_MODE=manual`), so every order on the floor
+  originates from an approved Production Ledger. Upstream's default mints a
+  random order every 30 s, which would compete with the Paperless flow.
 - **Ports collide with a standalone** `~/umh-factory` **deployment** (80, 8081,
 502, 4840-4852, 8090, 5432). `start.sh` refuses to start while one runs.
 - `docker compose down -v` wipes Paperless + reactor state; the factory dirs

@@ -177,6 +177,13 @@ services:
       - SIMULATOR_LINE_METAL_PARTS_FABRICATION=1
       - SIMULATOR_WEBHOOK_ENABLED=true
       - SIMULATOR_WEBHOOK_TARGET_URL=http://umh-core:8090/api/v1/
+      # The simulator ships with a fake ERP that mints a random order every 30 s
+      # (erp.mode "auto" in simulator-config/global.yaml). In this demo every
+      # order originates from an approved Production Ledger, so the ERP runs in
+      # manual mode: it never invents orders, and the MES still dispatches the
+      # ones POSTed via /api/orders. Env overrides the file, keeping the vendored
+      # config identical to upstream.
+      - SIMULATOR_ERP_MODE=manual
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
       interval: 30s
