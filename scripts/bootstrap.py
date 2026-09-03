@@ -60,24 +60,48 @@ commitment ONLY, using exclusively the SET_COMMITMENT operation. Never use
 APPROVE_ORDER, OPEN_LEDGER, START_RUN, RECORD_ACTUALS_SNAPSHOT, CLOSE_OUT,
 CLOSE_EARLY, ACKNOWLEDGE or VOID_LEDGER: a human reviews and authorises the order.
 
-Field guidance:
-- customer: the buyer on the order. manufacturer: the supplier receiving it.
-- line: the production line INSTANCE that will run the job. Valid values:
+WIRE FORMAT — the input is validated strictly; one wrong type rejects the whole
+action, so follow these exactly:
+- Money fields (scrapLiabilityPerUnit, latePenaltyPerHour) are plain JSON
+  numbers: 2.10, not "2.10 EUR" and not a string.
+- Percentages (committedQualityPct, committedOeeFloorPct) are plain numbers:
+  98.0, not "98%".
+- Quantities/hours (committedQuantity, logisticsLeadTimeHours) are numbers.
+- Dates (requestedDeliveryAt, productionDueDate) are ISO-8601 UTC strings with
+  a Z suffix, e.g. "2026-09-10T12:39:00.000Z". Convert local times to UTC.
+- Enums are exact tokens: oeeMeasurementBasis in BUYER_MEASURED |
+  SUPPLIER_REPORTED | NOT_MEASURED; yieldComparison in AT_OR_ABOVE |
+  STRICTLY_ABOVE; requiredAcknowledgements is a JSON array of CONTROLLING
+  and/or PRODUCTION.
+- Omit any field the document does not state. Never invent values.
+
+FIELD MAPPING (from the PO's header, items and quality & delivery conditions):
+- customer: the buyer issuing the PO. manufacturer: the supplier receiving it.
+- agreementRef: the supply agreement reference cited (e.g. MMW-HIA-2025-07).
+- line: the production line INSTANCE for the product family. Valid values:
   automotive-welding-1, electronics-through-hole-1, metal-parts-fabrication-1,
-  window-frame-1. Choose by product family.
+  window-frame-1.
 - partNumber: the internal part/recipe code. Valid values per line:
   automotive-welding-1: FRAME-WELD-A, FRAME-WELD-B;
   electronics-through-hole-1: THT-MAIN-A, THT-SENS-B;
   metal-parts-fabrication-1: BRACKET-SS-A, PANEL-AL-B;
   window-frame-1: WIN-STD-A, WIN-LRG-B.
-  Map the ordered item to the closest code; put the order's own item wording
-  in partDescription.
-- committedQuantity: the ordered quantity (integer).
-- committedQualityPct / committedOeeFloorPct: quality / OEE floors if the
-  order or its terms state them; otherwise omit.
-- deadline: the requested delivery date, as an ISO timestamp.
+  Map the ordered item to the closest code; put the PO's own item wording in
+  partDescription.
+- committedQuantity: the ordered quantity.
+- committedQualityPct: the minimum first-pass yield / quality floor clause.
+- yieldComparison: AT_OR_ABOVE when the clause says "minimum" / "at least";
+  STRICTLY_ABOVE only if it says "above" / "exceeding".
+- committedOeeFloorPct: the minimum line OEE / capacity assurance clause.
+- oeeMeasurementBasis: SUPPLIER_REPORTED if OEE is reported by the supplier,
+  BUYER_MEASURED if measured by the buyer, NOT_MEASURED if unstated.
+- scrapLiabilityPerUnit: the per-rejected-unit liability rate.
+- latePenaltyPerHour: the per-hour late-delivery penalty rate.
+- requestedDeliveryAt + deliveryTimezone: the requested delivery date and time
+  (UTC ISO) and the IANA zone it was expressed in (German sites: Europe/Berlin).
 - currency: ISO 4217 code (EUR unless stated otherwise).
-- Do NOT set orderId — it is assigned by the factory at approval.
+- Do NOT set orderId, deadline, productionDueDate or logisticsLeadTimeHours —
+  the factory and the site set those.
 """
 
 
@@ -193,7 +217,7 @@ def read_sync_state(doc_id: str):
     data = gql("""
       query($id:String!) {
         PaperlessSync { document(identifier:$id) { document { state { global {
-          mappings { id paperlessTypeId targetDocumentType enabled }
+          mappings { id paperlessTypeId targetDocumentType enabled instructions }
           push { enabled subgraphUrl paperlessWorkflowId error }
           credentials { instanceUrl }
           connection { status }
@@ -239,7 +263,8 @@ def ensure_mapping(doc_id: str, paperless_type_id: int) -> None:
                 "instructions": MAPPING_INSTRUCTIONS,
             }})
         log(f"added mapping {DOCTYPE_NAME}(id={paperless_type_id}) -> {TARGET_DOCUMENT_TYPE}")
-    elif existing["paperlessTypeId"] != paperless_type_id or not existing["enabled"]:
+    elif (existing["paperlessTypeId"] != paperless_type_id or not existing["enabled"]
+          or (existing.get("instructions") or "") != MAPPING_INSTRUCTIONS):
         gql("""
           mutation($doc:PHID!,$input:PaperlessSync_UpdateMappingInput!) {
             PaperlessSync { updateMapping(docId:$doc, input:$input) { id } } }""",
@@ -248,6 +273,7 @@ def ensure_mapping(doc_id: str, paperless_type_id: int) -> None:
                 "paperlessTypeId": paperless_type_id,
                 "paperlessTypeName": DOCTYPE_NAME,
                 "enabled": True,
+                "instructions": MAPPING_INSTRUCTIONS,
             }})
         log(f"updated mapping to {DOCTYPE_NAME}(id={paperless_type_id}) (was id={existing['paperlessTypeId']})")
     else:
