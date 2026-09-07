@@ -1,6 +1,6 @@
 time_scale: 1.0
 random_factor: 0.1
-tick_rate_ms: 100
+tick_rate_ms: 25
 log_level: "info"
 api:
   host: "0.0.0.0"

@@ -7,26 +7,26 @@ machines:
     type: "cnc_router"
     role: "CNC-route panel shapes, drill holes, and cut joints"
     defaults:
-      cycle_time_ms: 18000
+      cycle_time_ms: 450
       scrap_rate: 0.03
       breakdown_probability: 0.025
-      auto_restore_time_ms: 45000
+      auto_restore_time_ms: 1125
   - stage: 2
     type: "edge_bander"
     role: "Apply and trim edge banding on exposed panel edges"
     defaults:
-      cycle_time_ms: 12000
+      cycle_time_ms: 300
       scrap_rate: 0.02
       breakdown_probability: 0.015
-      auto_restore_time_ms: 25000
+      auto_restore_time_ms: 625
   - stage: 3
     type: "assembly_press"
     role: "Press-fit dowels and assemble panel components"
     defaults:
-      cycle_time_ms: 25000
+      cycle_time_ms: 625
       scrap_rate: 0.04
       breakdown_probability: 0.030
-      auto_restore_time_ms: 40000
+      auto_restore_time_ms: 1000
 buffers:
   default_capacity: 8
   overrides: []
@@ -37,15 +37,15 @@ recipes:
     planned_qty_range: [10, 30]
     overrides:
       1:
-        cycle_time_ms: 22000
+        cycle_time_ms: 550
       3:
-        cycle_time_ms: 20000
+        cycle_time_ms: 500
   - product_id: "SHELF-PINE-B"
     description: "Pine shelf unit - 80x30cm with three adjustable shelves"
     cost_per_unit: 42.00
     planned_qty_range: [15, 50]
     overrides:
       1:
-        cycle_time_ms: 15000
+        cycle_time_ms: 375
       2:
-        cycle_time_ms: 10000
+        cycle_time_ms: 250

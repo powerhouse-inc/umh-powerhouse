@@ -7,26 +7,26 @@ machines:
     type: "filling_machine"
     role: "Fill bottles with liquid product at high speed"
     defaults:
-      cycle_time_ms: 1500
+      cycle_time_ms: 200
       scrap_rate: 0.02
       breakdown_probability: 0.015
-      auto_restore_time_ms: 15000
+      auto_restore_time_ms: 375
   - stage: 2
     type: "sealing_machine"
     role: "Apply and seal caps on filled bottles"
     defaults:
-      cycle_time_ms: 1000
+      cycle_time_ms: 200
       scrap_rate: 0.01
       breakdown_probability: 0.010
-      auto_restore_time_ms: 10000
+      auto_restore_time_ms: 250
   - stage: 3
     type: "labeling_machine"
     role: "Apply product labels and lot codes"
     defaults:
-      cycle_time_ms: 800
+      cycle_time_ms: 200
       scrap_rate: 0.005
       breakdown_probability: 0.005
-      auto_restore_time_ms: 8000
+      auto_restore_time_ms: 200
 buffers:
   default_capacity: 30
   overrides: []
@@ -37,13 +37,13 @@ recipes:
     planned_qty_range: [200, 1000]
     overrides:
       1:
-        cycle_time_ms: 1800
+        cycle_time_ms: 200
   - product_id: "WATER-1L"
     description: "1 liter purified water bottles"
     cost_per_unit: 0.50
     planned_qty_range: [300, 1500]
     overrides:
       1:
-        cycle_time_ms: 1200
+        cycle_time_ms: 200
       2:
-        cycle_time_ms: 900
+        cycle_time_ms: 200
