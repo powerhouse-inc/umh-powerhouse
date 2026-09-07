@@ -78,6 +78,17 @@ builder. Grafana is deliberately omitted — the ledger demo does not use it.
 
 ## Notes
 
+- **The floor is tuned for demo pace.** Every `cycle_time_ms` and
+  `auto_restore_time_ms` in `umh-factory/simulator-config/lines/` is 1/40 of
+  upstream's, and `tick_rate_ms` is 25 rather than 100 (a 100 ms tick cannot
+  represent a 250 ms cycle, and an inaccurate actual would break the
+  ideal-vs-actual match OEE depends on). An 80-unit order finishes in ~80 s
+  instead of ~55 min. This is done in the config rather than with
+  `SIMULATOR_TIME_SCALE` deliberately: time-scaling leaves the *nominal* cycle
+  time unchanged, so the historian's "ideal" no longer matches what machines
+  actually do and `performance_pct` pegs at 100. Cutting the configured times
+  keeps every reported figure honest.
+
 - **The factory never invents orders.** The simulator's fake ERP is run in
   manual mode (`SIMULATOR_ERP_MODE=manual`), so every order on the floor
   originates from an approved Production Ledger. Upstream's default mints a

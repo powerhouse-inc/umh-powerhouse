@@ -7,34 +7,34 @@ machines:
     type: "metal_forming"
     role: "Stamp and form sheet metal blanks into frame components"
     defaults:
-      cycle_time_ms: 12000
+      cycle_time_ms: 300
       scrap_rate: 0.03
       breakdown_probability: 0.025
-      auto_restore_time_ms: 45000
+      auto_restore_time_ms: 1125
   - stage: 2
     type: "spot_welder"
     role: "Spot-weld formed panels at structural joints"
     defaults:
-      cycle_time_ms: 8000
+      cycle_time_ms: 200
       scrap_rate: 0.02
       breakdown_probability: 0.020
-      auto_restore_time_ms: 30000
+      auto_restore_time_ms: 750
   - stage: 3
     type: "robot_welder"
     role: "Seam-weld frame assembly for structural integrity"
     defaults:
-      cycle_time_ms: 15000
+      cycle_time_ms: 375
       scrap_rate: 0.04
       breakdown_probability: 0.030
-      auto_restore_time_ms: 60000
+      auto_restore_time_ms: 1500
   - stage: 4
     type: "robot_pick_place"
     role: "Unload and palletize finished welded frames"
     defaults:
-      cycle_time_ms: 10000
+      cycle_time_ms: 250
       scrap_rate: 0.01
       breakdown_probability: 0.015
-      auto_restore_time_ms: 20000
+      auto_restore_time_ms: 500
 buffers:
   default_capacity: 8
   overrides: []
@@ -45,14 +45,14 @@ recipes:
     planned_qty_range: [20, 60]
     overrides:
       3:
-        cycle_time_ms: 14000
+        cycle_time_ms: 350
   - product_id: "FRAME-WELD-B"
     description: "Truck body frame - heavy-duty platform"
     cost_per_unit: 150.00
     planned_qty_range: [10, 30]
     overrides:
       1:
-        cycle_time_ms: 15000
+        cycle_time_ms: 375
       3:
-        cycle_time_ms: 18000
+        cycle_time_ms: 450
         scrap_rate: 0.05

@@ -7,26 +7,26 @@ machines:
     type: "extruder"
     role: "Melt and extrude plastic resin into preform"
     defaults:
-      cycle_time_ms: 12000
+      cycle_time_ms: 300
       scrap_rate: 0.03
       breakdown_probability: 0.020
-      auto_restore_time_ms: 50000
+      auto_restore_time_ms: 1250
   - stage: 2
     type: "injection_molding"
     role: "Inject molten plastic into mold cavity under pressure"
     defaults:
-      cycle_time_ms: 15000
+      cycle_time_ms: 375
       scrap_rate: 0.04
       breakdown_probability: 0.025
-      auto_restore_time_ms: 60000
+      auto_restore_time_ms: 1500
   - stage: 3
     type: "trimming_press"
     role: "Trim flash and sprue from molded parts"
     defaults:
-      cycle_time_ms: 8000
+      cycle_time_ms: 200
       scrap_rate: 0.02
       breakdown_probability: 0.015
-      auto_restore_time_ms: 20000
+      auto_restore_time_ms: 500
 buffers:
   default_capacity: 10
   overrides: []
@@ -37,17 +37,17 @@ recipes:
     planned_qty_range: [40, 150]
     overrides:
       2:
-        cycle_time_ms: 18000
+        cycle_time_ms: 450
       3:
-        cycle_time_ms: 10000
+        cycle_time_ms: 250
   - product_id: "PIPE-PVC-B"
     description: "PVC pipe fitting - 50mm elbow connector"
     cost_per_unit: 8.50
     planned_qty_range: [80, 300]
     overrides:
       1:
-        cycle_time_ms: 10000
+        cycle_time_ms: 250
       2:
-        cycle_time_ms: 12000
+        cycle_time_ms: 300
       3:
-        cycle_time_ms: 6000
+        cycle_time_ms: 200

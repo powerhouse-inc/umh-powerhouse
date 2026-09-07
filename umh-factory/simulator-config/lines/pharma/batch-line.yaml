@@ -7,26 +7,26 @@ machines:
     type: "reactor_vessel"
     role: "Mix and react active pharmaceutical ingredients in batch"
     defaults:
-      cycle_time_ms: 60000
+      cycle_time_ms: 1500
       scrap_rate: 0.02
       breakdown_probability: 0.015
-      auto_restore_time_ms: 120000
+      auto_restore_time_ms: 3000
   - stage: 2
     type: "pharma_filler"
     role: "Precision-fill measured doses into vials or bottles"
     defaults:
-      cycle_time_ms: 25000
+      cycle_time_ms: 625
       scrap_rate: 0.03
       breakdown_probability: 0.020
-      auto_restore_time_ms: 60000
+      auto_restore_time_ms: 1500
   - stage: 3
     type: "capping_machine"
     role: "Apply tamper-evident caps and seal containers"
     defaults:
-      cycle_time_ms: 20000
+      cycle_time_ms: 500
       scrap_rate: 0.01
       breakdown_probability: 0.010
-      auto_restore_time_ms: 30000
+      auto_restore_time_ms: 750
 buffers:
   default_capacity: 5
   overrides: []
@@ -37,15 +37,15 @@ recipes:
     planned_qty_range: [5, 20]
     overrides:
       1:
-        cycle_time_ms: 55000
+        cycle_time_ms: 1375
       2:
-        cycle_time_ms: 28000
+        cycle_time_ms: 700
   - product_id: "SYRUP-BATCH-B"
     description: "Cough syrup batch - 200ml bottles"
     cost_per_unit: 3.50
     planned_qty_range: [5, 15]
     overrides:
       1:
-        cycle_time_ms: 45000
+        cycle_time_ms: 1125
       2:
-        cycle_time_ms: 22000
+        cycle_time_ms: 550
