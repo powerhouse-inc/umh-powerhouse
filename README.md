@@ -16,6 +16,30 @@ PDF into Paperless ─OCR→ paperless-sync (LLM) ─→ DRAFT ledger + attached
 
 
 
+## Setup
+
+- **Install a Docker runtime** — the demo needs `docker` plus Compose v2.
+
+  | Platform | Install                                                                          |
+  | -------- | -------------------------------------------------------------------------------- |
+  | macOS    | [OrbStack](https://orbstack.dev) — `brew install --cask orbstack`                |
+  | Linux    | [Docker Engine](https://docs.docker.com/engine/install/) + the Compose v2 plugin |
+  | Windows  | [Docker Desktop](https://www.docker.com/products/docker-desktop/), WSL2 backend  |
+
+  `switchboard` and `connect` ship `linux/arm64` images, so they run natively on
+  Apple Silicon — no Rosetta or QEMU emulation, and no `platform:` pin needed.
+
+  **On macOS, OrbStack is still the easier option.** It installs no privileged
+  helper, so it cannot hit the macOS "Malware Blocked / com.docker.vmnetd" false
+  positive that leaves Docker Desktop unable to start.
+
+- Clone this repository
+
+```bash
+git clone https://github.com/powerhouse-inc/umh-powerhouse.git
+cd umh-powerhouse
+```
+
 ## Run it
 
 ```bash

@@ -12,8 +12,8 @@
 # floor, and the umh-order-poller streams machine actuals back into the
 # ledger's evidence trail.
 #
-# Pattern (images, registry packages, one-shot bootstrap, apollo patch) is
-# lifted from powerhouse-inc/paperless-billing; the factory core (simulator,
+# Pattern (images, registry packages, one-shot bootstrap) is lifted from
+# powerhouse-inc/paperless-billing; the factory core (simulator,
 # umh-core, TimescaleDB, pgbouncer, nginx) is vendored from a v1.4.0
 # --fixed-demo deployment of united-manufacturing-hub/umh-factory-demo under
 # ./umh-factory/ — no installer run needed, and Grafana is deliberately
@@ -75,20 +75,31 @@ services:
   # package (document models, editors, umh-order-poller processor, forked
   # paperless-sync processor + webhook subgraph) at startup from the registry.
   switchboard:
-    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.2-dev.68}
-    platform: linux/amd64 # images are amd64-only; Apple Silicon emulates
+    # v6.2.2 is the production reactor line the ledger package was built against
+    # (document-model and @powerhousedao/reactor-browser peer deps are 6.2.2). An
+    # older line fails supergraph composition, leaves the gateway with no query
+    # root, and switchboard crash-loops. Tags are v-PREFIXED; a bare 6.2.2 fails
+    # with "artifact not found".
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.2}
     restart: unless-stopped
-    # TEMPORARY while PH_IMAGE_TAG <= v6.2.2-dev.68: patches a broken
-    # @apollo/subgraph before handing off to the real entrypoint. Without it
-    # every subgraph is dropped and /graphql 404s while /health stays green.
-    entrypoint: ["/bin/sh", "/patch-apollo-subgraph.sh"]
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
     volumes:
       - switchboard_pglite:/app/.ph
-      - ./scripts/patch-apollo-subgraph.sh:/patch-apollo-subgraph.sh:ro
     environment:
-      # PH_REGISTRY_* both installs AND loads the package (names, not URLs).
+      # The reactor's package manager loads these at startup from the registry
+      # CDN -- they are NOT installed into node_modules. It reads
+      # PH_REGISTRY_PACKAGES (+ PH_REGISTRY_URL, falling back to
+      # powerhouse.config.json packageRegistryUrl); both take package NAMES, not
+      # URLs. Without them the log reads
+      #   [reactor-api][package-manager] Loading packages: , /app
+      # -- an empty list -- and no document model or subgraph is registered, so
+      # the drive stays empty.
+      #
+      # STILL THE DEV REGISTRY: the image defaults to the production registry
+      # (https://registry.vetra.io), but the ledger packages are published only
+      # to registry.dev.vetra.io -- the production registry answers 404 for them.
+      # Drop this override once they are published to production.
       - PH_REGISTRY_URL=${PH_REGISTRY_URL:-https://registry.dev.vetra.io}
       - PH_REGISTRY_PACKAGES=${UMH_LEDGER_PACKAGE:-umh-production-ledger}@${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}
       # ---- forked paperless-sync processor (read at startup) ----
@@ -108,15 +119,15 @@ services:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
       interval: 10s
       timeout: 3s
-      # The registry install runs BEFORE the server listens; a cold pnpm
-      # store takes minutes. 30s start_period reads as unhealthy while it is
-      # simply still installing.
+      # Package loading runs BEFORE the server starts listening. The upstream
+      # example's 30s is not enough and makes the container look unhealthy while
+      # it is simply still fetching from the registry CDN.
       start_period: 240s
       retries: 5
 
   connect:
-    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.2-dev.68}
-    platform: linux/amd64
+    # Same reactor line as switchboard -- Connect loads the same packages.
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.2}
     restart: unless-stopped
     depends_on:
       switchboard:
