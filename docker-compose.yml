@@ -80,7 +80,7 @@ services:
     # older line fails supergraph composition, leaves the gateway with no query
     # root, and switchboard crash-loops. Tags are v-PREFIXED; a bare 6.2.2 fails
     # with "artifact not found".
-    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.2}
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.3-dev.21}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
@@ -103,6 +103,25 @@ services:
       - PH_REGISTRY_URL=${PH_REGISTRY_URL:-https://registry.dev.vetra.io}
       - PH_REGISTRY_PACKAGES=${UMH_LEDGER_PACKAGE:-umh-production-ledger}@${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}
       # ---- forked paperless-sync processor (read at startup) ----
+      # ---- the workflow runtime, which now does the integration ----
+      # The three workflows the seed publishes replace the paperless-sync and
+      # umh-order-poller processors this stack used to run.
+      - PH_WORKFLOWS_ENABLED=true
+      # Piece code runs under an egress policy that denies private address
+      # space. Here every service a piece must reach — paperless, the floor,
+      # the reactor's own webhook endpoint — is a container on the compose
+      # network, which is private. 172.16.0.0/12 is the range Docker allocates
+      # these from; naming it is what lets a piece reach a sibling at all.
+      - PH_WORKFLOWS_EGRESS_ALLOW_ADDRESSES=${PH_WORKFLOWS_EGRESS_ALLOW_ADDRESSES:-172.16.0.0/12}
+      # The origin the paperless piece registers as its webhook target. Both
+      # ends are containers here, so this is the service name, not the host.
+      - PUBLIC_URL=http://switchboard:3000
+      # This package's own floor poller stays off: the floor workflow is the
+      # writer, and two writers must never both append to one evidence trail.
+      - UMH_POLLER_ENABLED=false
+      # ---- read by the forked paperless-sync processor, kept for reference ----
+      # Nothing creates a paperless-sync document any more, so the processor
+      # never activates; the extraction is a workflow step against OpenRouter.
       - PAPERLESS_AI_BASE_URL=${PAPERLESS_AI_BASE_URL:-https://openrouter.ai/api/v1}
       - PAPERLESS_AI_MODEL=${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
       - PAPERLESS_AI_API_KEY=${PAPERLESS_AI_API_KEY}
@@ -133,7 +152,7 @@ services:
 
   connect:
     # Same reactor line as switchboard -- Connect loads the same packages.
-    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.2}
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.3-dev.21}
     restart: unless-stopped
     depends_on:
       switchboard:
@@ -143,7 +162,18 @@ services:
     environment:
       # defaultDrives must be the drive URL as the BROWSER sees it (host
       # port): / answers 404, /d/pl-dashboard answers 200.
-      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"${PH_REGISTRY_URL:-https://registry.dev.vetra.io}","packages":[{"packageName":"${UMH_LEDGER_PACKAGE:-umh-production-ledger}","provider":"registry","version":"${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}"}],"connect":{"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/pl-dashboard","name":null,"icon":null}]}}}'
+      # workflowsEnabled loads @powerhousedao/workflow — the workflow and
+      # connection documents, their editors and Workflow Studio.
+      #
+      # Both drives are named, and NEITHER carries an `icon` key. That is
+      # deliberate: Connect reconciles its default drives on every load and
+      # forwards a null icon as an explicit clear request, so `"icon":null`
+      # here would wipe the marks the seed sets on the drives themselves.
+      # Omitting the key leaves them alone.
+      #
+      # offline:false so no precaching service worker is built — a stale app
+      # shell during a demo costs more than offline support buys.
+      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"${PH_REGISTRY_URL:-https://registry.dev.vetra.io}","packages":[{"packageName":"${UMH_LEDGER_PACKAGE:-umh-production-ledger}","provider":"registry","version":"${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}"}],"connect":{"app":{"workflowsEnabled":true,"offline":false},"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/pl-dashboard"},{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/workflows"}]}}}'
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3001/health"]
       interval: 10s
@@ -154,8 +184,13 @@ services:
   # One-shot wiring, idempotent — safe on every `up`. Creates the Paperless
   # "Purchase Order" type, the PL Dashboard drive, the Paperless Connection
   # sync document, and the Purchase Order -> umh/production-ledger mapping.
-  bootstrap:
-    image: docker.io/library/python:3.13-alpine
+  # One-shot wiring, idempotent — safe on every `up`. This is the ledger
+  # package's own demo seed (demo/scripts/ in umh-production-ledger), not a
+  # script maintained here: it creates the two drives, the paperless, floor and
+  # OpenRouter connections, and the three workflows that do the integration.
+  # It replaces bootstrap.py, which wired the paperless-sync PROCESSOR instead.
+  seed:
+    image: docker.io/library/node:24-alpine
     restart: "no"
     depends_on:
       webserver:
@@ -163,15 +198,18 @@ services:
       switchboard:
         condition: service_healthy
     volumes:
-      - ./scripts/bootstrap.py:/bootstrap.py:ro
+      - ./scripts:/seed:ro
     environment:
-      BOOTSTRAP_PAPERLESS_URL: http://webserver:8000
-      BOOTSTRAP_REACTOR_URL: http://switchboard:3000
-      BOOTSTRAP_PAPERLESS_URL_FROM_REACTOR: http://webserver:8000
-      BOOTSTRAP_SUBGRAPH_URL: http://switchboard:3000/graphql/paperless-webhook
-      PAPERLESS_ADMIN_USER: admin
-      PAPERLESS_ADMIN_PASSWORD: paperless
-    command: ["python3", "/bootstrap.py"]
+      # Service names, not localhost: the seed runs in a container and writes
+      # addresses the REACTOR will dial, which is also a container.
+      REACTOR_URL: http://switchboard:3000
+      PAPERLESS_URL: http://webserver:8000
+      UMH_API_URL: http://machine-simulator:8081
+      PAPERLESS_USER: admin
+      PAPERLESS_PASSWORD: paperless
+      PAPERLESS_AI_API_KEY: ${PAPERLESS_AI_API_KEY}
+      PAPERLESS_AI_MODEL: ${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
+    command: ["node", "/seed/seed.mjs"]
 
   # ── UMH factory core (vendored --fixed-demo deployment) ─────────────────
   machine-simulator:
@@ -212,7 +250,10 @@ services:
     image: management.umh.app/oci/united-manufacturing-hub/umh-core:v0.44.8
     restart: unless-stopped
     ports:
-      - "8090:8090"
+      # 8095 on the host, not 8090: the local package registry this stack
+      # installs the ledger from is on 8090. The container port is unchanged,
+      # so the simulator's in-network webhook to umh-core:8090 still works.
+      - "${UMH_CORE_HOST_PORT:-8095}:8090"
     volumes:
       - ./umh-core-data:/data
       # The vendored config carries every dataflow, including costs-api
