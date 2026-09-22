@@ -160,15 +160,21 @@ services:
       # workflowsEnabled loads @powerhousedao/workflow — the workflow and
       # connection documents, their editors and Workflow Studio.
       #
-      # Both drives are named, and NEITHER carries an `icon` key. That is
-      # deliberate: Connect reconciles its default drives on every load and
-      # forwards a null icon as an explicit clear request, so `"icon":null`
-      # here would wipe the marks the seed sets on the drives themselves.
-      # Omitting the key leaves them alone.
+      # Both drives carry their icon as a data URI, and that is the only place
+      # they are set: the seed names the drive, Connect reconciles its default
+      # drives on every load, and this is what it applies. A drive here with no
+      # `icon` key simply never gets one — which is what happened before these
+      # were inlined. `"icon":null` is different again and must never appear:
+      # null is forwarded as an explicit CLEAR, so it would wipe the mark rather
+      # than leave it alone.
+      #
+      # Long, and it has to be. The same two values live in
+      # powerhouse.config.json in umh-production-ledger; a shared URL would be
+      # better than two copies, if the mark ever gets somewhere stable to live.
       #
       # offline:false so no precaching service worker is built — a stale app
       # shell during a demo costs more than offline support buys.
-      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"${PH_REGISTRY_URL:-https://registry.dev.vetra.io}","packages":[{"packageName":"${UMH_LEDGER_PACKAGE:-umh-production-ledger}","provider":"registry","version":"${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}"}],"connect":{"app":{"workflowsEnabled":true,"offline":false},"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/pl-dashboard"},{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/workflows"}]}}}'
+      - 'PH_CONNECT_CONFIG_JSON={"packageRegistryUrl":"${PH_REGISTRY_URL:-https://registry.dev.vetra.io}","packages":[{"packageName":"${UMH_LEDGER_PACKAGE:-umh-production-ledger}","provider":"registry","version":"${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}"}],"connect":{"app":{"workflowsEnabled":true,"offline":false},"drives":{"defaultDrives":[{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/pl-dashboard","icon":"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Crect%20width%3D%2248%22%20height%3D%2248%22%20rx%3D%2210%22%20fill%3D%22%230036FF%22%2F%3E%3Cg%20transform%3D%22translate(11.08%208)%20scale(0.23216)%22%20fill%3D%22%23ffffff%22%3E%3Cpath%20d%3D%22M96.68%2C99.59l-41%2C22.84-41-22.84V57.37H0v46.51a7.31%2C7.31%2C0%2C0%2C0%2C3.75%2C6.38l47.9%2C26.66a7.34%2C7.34%2C0%2C0%2C0%2C3.55.92h.88a7.34%2C7.34%2C0%2C0%2C0%2C3.55-.92l47.9-26.66a7.31%2C7.31%2C0%2C0%2C0%2C3.75-6.38V57.37H96.68Z%22%2F%3E%3Cpath%20d%3D%22M107.53%2C27.58%2C59.63.92A7.34%2C7.34%2C0%2C0%2C0%2C56.08%2C0H55.2a7.34%2C7.34%2C0%2C0%2C0-3.55.92L3.75%2C27.58A7.31%2C7.31%2C0%2C0%2C0%2C0%2C34v4.92l13.36.06L55.64%2C15.41%2C97.92%2C38.94l13.36-.15V34A7.31%2C7.31%2C0%2C0%2C0%2C107.53%2C27.58Z%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"},{"url":"http://localhost:${SWITCHBOARD_HOST_PORT:-4001}/d/workflows","icon":"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Crect%20width%3D%2248%22%20height%3D%2248%22%20rx%3D%2210%22%20fill%3D%22%231e293b%22%2F%3E%3Cg%20stroke%3D%22%23ffffff%22%20stroke-width%3D%222.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%3E%3Cpath%20d%3D%22M18%2024h5a3%203%200%200%200%203-3v-4a3%203%200%200%201%203-3h1%22%2F%3E%3Cpath%20d%3D%22M18%2024h5a3%203%200%200%201%203%203v4a3%203%200%200%200%203%203h1%22%2F%3E%3C%2Fg%3E%3Cg%20fill%3D%22%23ffffff%22%3E%3Ccircle%20cx%3D%2214%22%20cy%3D%2224%22%20r%3D%224.5%22%2F%3E%3Ccircle%20cx%3D%2234%22%20cy%3D%2214%22%20r%3D%224.5%22%2F%3E%3Ccircle%20cx%3D%2234%22%20cy%3D%2234%22%20r%3D%224.5%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"}]}}}'
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3001/health"]
       interval: 10s
