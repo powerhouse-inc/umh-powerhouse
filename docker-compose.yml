@@ -125,23 +125,16 @@ services:
       - PAPERLESS_WEBHOOK_SECRET=${PAPERLESS_WEBHOOK_SECRET:-local-dev-webhook-secret-not-for-production}
       # In-network hops — Paperless and the simulator are containers here.
       - PAPERLESS_SUBGRAPH_URL=http://switchboard:3000/graphql/paperless-webhook
-      # ---- umh-order-poller (read at startup) ----
-      # OFF, and this is the one line to change if you want the processor back.
+      # ---- umh-order-poller ----
+      # Off, and not a toggle. This demo's ingress is the floor workflow; the
+      # poller is the ingress it replaced. Two writers on one append-only
+      # evidence trail duplicate every entry, so there is no configuration in
+      # which both belong, and an env override would only make that reachable by
+      # accident.
       #
-      # The warning that came with this setting still stands: run one ingress or
-      # the other — two writers on one append-only evidence trail duplicate every
-      # entry. What changed is which one this demo runs. It asked for the
-      # processor explicitly when the processor was its ingress; the floor
-      # workflow is the writer now, so the poller has to be off or every reading
-      # is recorded twice.
-      #
-      # Set UMH_POLLER_ENABLED=true and delete the floor workflow to go back.
-      - UMH_POLLER_ENABLED=${UMH_POLLER_ENABLED:-false}
-      - UMH_API_URL=http://machine-simulator:8081
-      - UMH_POLL_INTERVAL_MS=${UMH_POLL_INTERVAL_MS:-15000}
-      # Costs API (part_scrap_costs / line_downtime_costs via the costs-api
-      # dataflow, fronted by nginx) — the poller prices the automatic close-out.
-      - UMH_GATEWAY_URL=http://nginx:80
+      # The poller still ships in the package. Running it means running the
+      # processor demo, which is a different stack, not a flag here.
+      - UMH_POLLER_ENABLED=false
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/health"]
       interval: 10s
