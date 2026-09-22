@@ -116,9 +116,6 @@ services:
       # The origin the paperless piece registers as its webhook target. Both
       # ends are containers here, so this is the service name, not the host.
       - PUBLIC_URL=http://switchboard:3000
-      # This package's own floor poller stays off: the floor workflow is the
-      # writer, and two writers must never both append to one evidence trail.
-      - UMH_POLLER_ENABLED=false
       # ---- read by the forked paperless-sync processor, kept for reference ----
       # Nothing creates a paperless-sync document any more, so the processor
       # never activates; the extraction is a workflow step against OpenRouter.
@@ -129,12 +126,17 @@ services:
       # In-network hops — Paperless and the simulator are containers here.
       - PAPERLESS_SUBGRAPH_URL=http://switchboard:3000/graphql/paperless-webhook
       # ---- umh-order-poller (read at startup) ----
-      # Opt-in since umh-production-ledger made the floor poller off by
-      # default: its ingress is a workflow there now (reactor-workflow's UMH
-      # piece plus the reactor piece). This demo is the processor's demo, so it
-      # asks for the processor. Run one or the other — two writers on one
-      # append-only evidence trail duplicate every entry.
-      - UMH_POLLER_ENABLED=${UMH_POLLER_ENABLED:-true}
+      # OFF, and this is the one line to change if you want the processor back.
+      #
+      # The warning that came with this setting still stands: run one ingress or
+      # the other — two writers on one append-only evidence trail duplicate every
+      # entry. What changed is which one this demo runs. It asked for the
+      # processor explicitly when the processor was its ingress; the floor
+      # workflow is the writer now, so the poller has to be off or every reading
+      # is recorded twice.
+      #
+      # Set UMH_POLLER_ENABLED=true and delete the floor workflow to go back.
+      - UMH_POLLER_ENABLED=${UMH_POLLER_ENABLED:-false}
       - UMH_API_URL=http://machine-simulator:8081
       - UMH_POLL_INTERVAL_MS=${UMH_POLL_INTERVAL_MS:-15000}
       # Costs API (part_scrap_costs / line_downtime_costs via the costs-api
