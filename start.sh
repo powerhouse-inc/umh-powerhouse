@@ -138,7 +138,14 @@ mkdir -p .local/consume
 # auto-create it root-owned and the container crash-loops with
 # "Cannot write to /data directory". (The upstream installer's builder does
 # this same chown.)
-docker run --rm -v "$PWD:/w" alpine sh -c "mkdir -p /w/umh-core-data /w/simulator-data && chown -R 1000:1000 /w/umh-core-data" >/dev/null
+#
+# The config.yaml it touches is the mountpoint for the vendored config, which
+# compose mounts as a file INSIDE the ./umh-core-data:/data bind mount. When the
+# file is missing, docker has to create it through that bind mount, and on a
+# fresh data dir the first attempt fails with "mountpoint ... is outside of
+# rootfs" -- the file then exists, so a retry works. Creating it here means the
+# first start works.
+docker run --rm -v "$PWD:/w" alpine sh -c "mkdir -p /w/umh-core-data /w/simulator-data && touch /w/umh-core-data/config.yaml && chown -R 1000:1000 /w/umh-core-data" >/dev/null
 
 # ── Pull ────────────────────────────────────────────────────────────────────
 # Streamed, not captured. Downloading the images is the slow part of a first
