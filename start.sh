@@ -149,11 +149,11 @@ say "==> Pulling images (the very first run downloads ~3 GB)..."
 docker compose pull
 
 # ── Up ──────────────────────────────────────────────────────────────────────
-# Long-running services only, --no-deps: bootstrap is a one-shot whose
-# depends_on would otherwise block `up` with no output until Paperless and the
-# reactor are healthy -- which reads as a hang while Docker already shows the
-# other containers. Start the services, narrate health ourselves, then run
-# bootstrap once they are actually up.
+# Long-running services only, --no-deps: seed is a one-shot whose depends_on
+# would otherwise block `up` with no output until Paperless and the reactor are
+# healthy -- which reads as a hang while Docker already shows the other
+# containers. Start the services, narrate health ourselves, then run the seed
+# once they are actually up.
 # `2>&1 | tee` keeps compose's own create/start lines on screen while still
 # writing them to a file for the error checks below (pipefail keeps the exit
 # status).
@@ -246,35 +246,28 @@ say "==> Paperless, reactor, Connect, and the factory floor are healthy"
 
 # ── Wire Paperless to the reactor ────────────────────────────────────────────
 # Run only now that deps are healthy. `run --no-deps` starts immediately and
-# streams the bootstrap logs; `up -d` would recreate the Created/exited one-shot
+# streams the seed's logs; `up -d` would recreate the Created/exited one-shot
 # and wait without output. --rm so a leftover container cannot mask a new run.
-# Skip when the sync document already exists: re-running createDocument is not
-# fully idempotent. After `down -v` the reactor is empty and the probe is 0, so
-# a fresh start still wires.
-wired=$(curl -sS --max-time 15 -X POST -H 'content-type: application/json' \
-  -d '{"query":"{ PaperlessSync { documents { totalCount } } }"}' \
-  "http://localhost:${SWITCHBOARD_PORT}/graphql" 2>/dev/null || true)
-if printf '%s' "$wired" | grep -Eq '"totalCount": *[1-9]'; then
-  say "==> Wiring already present, skipping bootstrap"
+# Every start runs it: the seed is idempotent by name (it looks before it
+# writes, and never edits a workflow that already exists), and a re-run is also
+# what rotates the OpenRouter key from .env into the reactor's secret store.
+say "==> Seeding drives, connections and workflows"
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  timeout --foreground 600 docker compose run --rm --no-deps seed
+  code=$?
 else
-  say "==> Wiring Paperless to the reactor"
-  set +e
-  if command -v timeout >/dev/null 2>&1; then
-    timeout --foreground 600 docker compose run --rm --no-deps bootstrap
-    code=$?
-  else
-    docker compose run --rm --no-deps bootstrap
-    code=$?
-  fi
-  set -e
-  if [ "$code" -eq 124 ]; then
-    die "bootstrap did not finish within 10 minutes. Check: docker compose logs --tail=50 webserver switchboard"
-  fi
-  if [ "$code" != "0" ]; then
-    die "the Paperless <-> reactor wiring failed (bootstrap exit $code). Check: docker compose logs bootstrap"
-  fi
-  say "==> Wiring complete"
+  docker compose run --rm --no-deps seed
+  code=$?
 fi
+set -e
+if [ "$code" -eq 124 ]; then
+  die "the seed did not finish within 10 minutes. Check: docker compose logs --tail=50 webserver switchboard"
+fi
+if [ "$code" != "0" ]; then
+  die "seeding the reactor failed (seed exit $code) -- its output is above. Check also: docker compose logs --tail=50 switchboard"
+fi
+say "==> Seeding complete"
 
 # ── Post-condition: the ledger package actually composed into the supergraph ──
 schema=$(curl -s -X POST -H 'Content-Type: application/json' \
@@ -314,7 +307,7 @@ cat <<SUMMARY
   attached. Review, approve (creates the floor order), open the ledger,
   and watch the evidence trail fill from the machines.
 
-    docker compose logs -f switchboard   # ingestion + floor poller
+    docker compose logs -f switchboard   # the workflows' runs
     docker compose down                  # stop   (-v wipes everything)
-    docker compose run --rm bootstrap    # re-run wiring
+    docker compose run --rm seed         # re-run the seed
 SUMMARY
