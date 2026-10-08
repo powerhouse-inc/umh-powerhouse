@@ -10,49 +10,72 @@ import { randomUUID } from "node:crypto";
 export const LEDGER_TYPE = "umh/production-ledger";
 export const UMH_PIECE = "@powerhousedao/piece-umh";
 export const PAPERLESS_PIECE = "@powerhousedao/piece-paperless-ngx";
-// The package, and the version-pinned form its block types carry.
-//
-// A connection stores the PACKAGE: the runtime checks a step's piece against
-// its connection's connectorId (packageFromConnectorId strips a "#suffix" and
-// nothing else), so a version in there never matches and the step is refused
-// its credential — "Connection is not available to this block".
+// A connection names the package without a version, or the runtime refuses
+// the step its credential: "Connection is not available to this block".
 export const OPENROUTER_PIECE = "@activepieces/piece-open-router";
-export const OPENROUTER_PINNED = `${OPENROUTER_PIECE}@0.2.0`;
-export const PAPERLESS_PINNED = `${PAPERLESS_PIECE}@0.1.0`;
 export const REACTOR_PIECE = "@powerhousedao/piece-reactor";
+export const CORE_PIECE = "@powerhousedao/piece-core";
 
-// Two kinds of piece, and the difference decides whether a version belongs in
-// the block type (pieces/engine/blocks.ts, parseBlockType):
-//
-// - A piece this reactor holds locally — the UMH piece ships inside this
-//   package, the reactor piece inside the runtime — is named WITHOUT a version.
-//   The installed copy is the one that runs, so a workflow naming it survives
-//   an upgrade. Unversioned resolves only against the local piece registry.
-// - A piece that comes from the package registry is named WITH one. An
-//   unversioned name the reactor does not hold locally does not resolve, and
-//   the failure is silent: pieceBinding returns undefined, the trigger is never
-//   supervised, and it reports armed=false with no error anywhere. Pinning is
-//   what lets the runtime fetch it, so paperless needs no `packages` entry in
-//   powerhouse.config.json.
-// The UMH piece ships inside this package and is named without a version. A
-// reactor running from the checkout holds it; one that INSTALLS this package
-// from a registry now keeps its pieces too (powerhouse-inc/powerhouse#3071), so
-// the name resolves to the version the package shipped either way \u2014 and a local
-// change still takes effect without republishing.
-export const TRIGGER_BLOCK = `${UMH_PIECE}#trigger:order_progressed`;
-export const FIND_BLOCK = `${REACTOR_PIECE}#document-find`;
-export const DISPATCH_BLOCK = `${REACTOR_PIECE}#document-dispatch`;
-export const NEW_DOCUMENT_BLOCK = `${PAPERLESS_PINNED}#trigger:new_document`;
-export const GET_FILE_BLOCK = `${PAPERLESS_PINNED}#get_document_file`;
-export const SCHEMA_BLOCK = `${REACTOR_PIECE}#document-schema`;
-export const CREATE_BLOCK = `${REACTOR_PIECE}#document-create`;
-export const ASK_LLM_BLOCK = `${OPENROUTER_PINNED}#ask-lmm`;
-export const GET_BLOCK = `${REACTOR_PIECE}#document-get`;
-export const DOCUMENT_EVENT_BLOCK = `${REACTOR_PIECE}#trigger:document-event`;
-export const CREATE_ORDER_BLOCK = `${UMH_PIECE}#create_order`;
-export const LIST_LINES_BLOCK = `${UMH_PIECE}#list_lines`;
-// Stock activepieces utility, version-pinned like every other registry piece.
-export const JSONATA_BLOCK = "@activepieces/piece-json@0.1.12#run_jsonata_query";
+// Core and reactor are host-bound and always run the installed copy, so they
+// pin the runtime the images ship; that way the resolution reads as a match.
+// docker-compose passes both pins in, since this runs with no node_modules.
+const required = (name) => {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set; the seed takes it from .env`);
+  return value;
+};
+const RUNTIME_VERSION = required("PH_IMAGE_TAG").replace(/^v/, "");
+const CORE_VERSION = RUNTIME_VERSION;
+const REACTOR_VERSION = RUNTIME_VERSION;
+// The host registers a package's pieces under the package's own version.
+const UMH_VERSION = required("UMH_LEDGER_VERSION");
+
+const block = (pieceName, pieceVersion, name) => ({ pieceName, pieceVersion, name });
+
+export const TRIGGER_BLOCK = block(UMH_PIECE, UMH_VERSION, "order_progressed");
+export const CREATE_ORDER_BLOCK = block(UMH_PIECE, UMH_VERSION, "create_order");
+export const LIST_LINES_BLOCK = block(UMH_PIECE, UMH_VERSION, "list_lines");
+export const FIND_BLOCK = block(REACTOR_PIECE, REACTOR_VERSION, "document-find");
+export const DISPATCH_BLOCK = block(REACTOR_PIECE, REACTOR_VERSION, "document-dispatch");
+export const SCHEMA_BLOCK = block(REACTOR_PIECE, REACTOR_VERSION, "document-schema");
+export const CREATE_BLOCK = block(REACTOR_PIECE, REACTOR_VERSION, "document-create");
+export const GET_BLOCK = block(REACTOR_PIECE, REACTOR_VERSION, "document-get");
+export const DOCUMENT_EVENT_BLOCK = block(REACTOR_PIECE, REACTOR_VERSION, "document-event");
+export const BRANCH_BLOCK = block(CORE_PIECE, CORE_VERSION, "branch");
+export const ASSERT_BLOCK = block(CORE_PIECE, CORE_VERSION, "assert");
+// Registry pieces pin the version the graph was written against, which is
+// also what lets the runtime fetch them without a `packages` entry.
+export const NEW_DOCUMENT_BLOCK = block(PAPERLESS_PIECE, "0.1.0", "new_document");
+export const GET_FILE_BLOCK = block(PAPERLESS_PIECE, "0.1.0", "get_document_file");
+export const ASK_LLM_BLOCK = block(OPENROUTER_PIECE, "0.2.0", "ask-lmm");
+export const JSONATA_BLOCK = block("@activepieces/piece-json", "0.1.12", "run_jsonata_query");
+
+// Reactor blocks get no reactor access without a bound REACTOR connection;
+// readers get the read-only one, so only create and dispatch can write.
+const WRITES = new Set(["document-create", "document-dispatch"]);
+function bindReactor(reactor, graph) {
+  const bind = (block, name) =>
+    block.pieceName === REACTOR_PIECE
+      ? { ...block, reactorConnectionId: WRITES.has(name) ? reactor.write : reactor.read }
+      : block;
+  return {
+    ...graph,
+    trigger: bind(graph.trigger, graph.trigger.triggerName),
+    steps: graph.steps.map((step) => bind(step, step.actionName)),
+  };
+}
+
+// How the workflow document names a step's block, and its trigger's.
+const action = ({ pieceName, pieceVersion, name }) => ({
+  pieceName,
+  pieceVersion,
+  actionName: name,
+});
+const trigger = ({ pieceName, pieceVersion, name }) => ({
+  pieceName,
+  pieceVersion,
+  triggerName: name,
+});
 
 // The workflow that replaces the processor.
 //
@@ -70,16 +93,16 @@ export const JSONATA_BLOCK = "@activepieces/piece-json@0.1.12#run_jsonata_query"
 // has either not frozen its baseline yet or has already closed out, and
 // evidence appended outside that window is evidence against a commitment that
 // was not in force.
-export function floorWorkflowGraph(connectionId) {
+export function floorWorkflowGraph(connectionId, reactor) {
   const triggerId = randomUUID();
   const counted = randomUUID();
   const find = randomUUID();
   const open = randomUUID();
   const snapshot = randomUUID();
-  return {
+  return bindReactor(reactor, {
     trigger: {
       id: triggerId,
-      blockType: TRIGGER_BLOCK,
+      ...trigger(TRIGGER_BLOCK),
       connectionId,
       config: {
         include_oee: true,
@@ -97,15 +120,15 @@ export function floorWorkflowGraph(connectionId) {
         id: counted,
         key: "counted",
         name: "Has the floor counted anything?",
-        blockType: "core#branch",
-        config: { condition: "{{trigger.payload.counted}}" },
+        ...action(BRANCH_BLOCK),
+        config: { operator: "BOOLEAN_IS_TRUE", left: "{{trigger.payload.counted}}" },
         position: { x: 320, y: 0 },
       },
       {
         id: find,
         key: "ledger",
         name: "Find the ledger bound to this order",
-        blockType: FIND_BLOCK,
+        ...action(FIND_BLOCK),
         config: {
           documentType: LEDGER_TYPE,
           // The index cannot query state, so the host matches within the page
@@ -121,10 +144,13 @@ export function floorWorkflowGraph(connectionId) {
         id: open,
         key: "open",
         name: "Is that ledger OPEN?",
-        blockType: "core#branch",
+        ...action(BRANCH_BLOCK),
         config: {
-          condition: "{{steps.ledger.output.documents.0.state.status}}",
-          equals: "OPEN",
+          operator: "TEXT_EXACTLY_MATCHES",
+          // No bound ledger finds nothing, and a missing path fails the step.
+          left: "{{steps.ledger.output.results[0].state.global.status || ''}}",
+          right: "OPEN",
+          caseSensitive: true,
         },
         position: { x: 960, y: 0 },
       },
@@ -132,9 +158,9 @@ export function floorWorkflowGraph(connectionId) {
         id: snapshot,
         key: "snapshot",
         name: "Append the evidence snapshot",
-        blockType: DISPATCH_BLOCK,
+        ...action(DISPATCH_BLOCK),
         config: {
-          documentId: "{{steps.ledger.output.documents.0.documentId}}",
+          documentId: "{{steps.ledger.output.results[0].header.id}}",
           documentType: LEDGER_TYPE,
           // Enforced by the step, not merely suggested: this workflow appends
           // evidence and must not be able to do anything else to the ledger.
@@ -171,7 +197,7 @@ export function floorWorkflowGraph(connectionId) {
       { id: randomUUID(), from: find, to: open, port: "next" },
       { id: randomUUID(), from: open, to: snapshot, port: "true" },
     ],
-  };
+  });
 }
 
 
@@ -301,6 +327,7 @@ export function purchaseOrderWorkflowGraph({
   ledgerDriveId,
   documentTypeId,
   model,
+  reactor,
 }) {
   const triggerId = randomUUID();
   const kind = randomUUID();
@@ -315,10 +342,10 @@ export function purchaseOrderWorkflowGraph({
   const assign = randomUUID();
   const file = randomUUID();
   const attach = randomUUID();
-  return {
+  return bindReactor(reactor, {
     trigger: {
       id: triggerId,
-      blockType: NEW_DOCUMENT_BLOCK,
+      ...trigger(NEW_DOCUMENT_BLOCK),
       connectionId: paperlessConnectionId,
       config: {
         // The piece translates this to 2.18's singular
@@ -340,12 +367,12 @@ export function purchaseOrderWorkflowGraph({
         // Redundant now that the trigger filters, and kept: it is the same
         // decision written where a reader of the workflow can see it, and it
         // still holds if the trigger is reconfigured or its filter cleared.
-        blockType: "core#branch",
+        ...action(BRANCH_BLOCK),
         config: {
-          condition: "{{trigger.payload.document_type}}",
-          // Compared as text: every expression resolves to a string, and the
-          // branch normalises both sides before comparing.
-          equals: documentTypeId === undefined ? "" : String(documentTypeId),
+          // Compared as text: a text operator reads paperless's number as digits.
+          operator: "TEXT_EXACTLY_MATCHES",
+          left: "{{trigger.payload.document_type}}",
+          right: documentTypeId === undefined ? "" : String(documentTypeId),
         },
         position: { x: 320, y: 0 },
       },
@@ -353,7 +380,7 @@ export function purchaseOrderWorkflowGraph({
         id: schema,
         key: "model",
         name: "Read the ledger's own schema",
-        blockType: SCHEMA_BLOCK,
+        ...action(SCHEMA_BLOCK),
         config: {
           documentType: LEDGER_TYPE,
           // Narrowed to the one operation the extractor may use. The whole
@@ -369,7 +396,7 @@ export function purchaseOrderWorkflowGraph({
         id: extract,
         key: "extract",
         name: "Extract the commitment",
-        blockType: ASK_LLM_BLOCK,
+        ...action(ASK_LLM_BLOCK),
         connectionId: aiConnectionId,
         config: { model, prompt: EXTRACTION_PROMPT, temperature: 0 },
         // The host's default is 30s, and a model reading a page of OCR and
@@ -382,7 +409,7 @@ export function purchaseOrderWorkflowGraph({
         id: draft,
         key: "draft",
         name: "Create the draft ledger",
-        blockType: CREATE_BLOCK,
+        ...action(CREATE_BLOCK),
         config: {
           documentType: LEDGER_TYPE,
           parentId: ledgerDriveId,
@@ -396,7 +423,7 @@ export function purchaseOrderWorkflowGraph({
         id: commit,
         key: "commitment",
         name: "Apply the extracted commitment",
-        blockType: DISPATCH_BLOCK,
+        ...action(DISPATCH_BLOCK),
         config: {
           documentId: "{{steps.draft.output.documentId}}",
           documentType: LEDGER_TYPE,
@@ -410,7 +437,7 @@ export function purchaseOrderWorkflowGraph({
         id: file,
         key: "scan",
         name: "Fetch the original scan",
-        blockType: GET_FILE_BLOCK,
+        ...action(GET_FILE_BLOCK),
         connectionId: paperlessConnectionId,
         config: {
           id: "{{trigger.payload.id}}",
@@ -424,7 +451,7 @@ export function purchaseOrderWorkflowGraph({
         id: attach,
         key: "attach",
         name: "Attach the scan to the ledger",
-        blockType: DISPATCH_BLOCK,
+        ...action(DISPATCH_BLOCK),
         config: {
           documentId: "{{steps.draft.output.documentId}}",
           documentType: LEDGER_TYPE,
@@ -447,7 +474,7 @@ export function purchaseOrderWorkflowGraph({
         id: lines,
         key: "lines",
         name: "List the floor's lines",
-        blockType: LIST_LINES_BLOCK,
+        ...action(LIST_LINES_BLOCK),
         connectionId: umhConnectionId,
         config: {},
         position: { x: 2560, y: 0 },
@@ -456,7 +483,7 @@ export function purchaseOrderWorkflowGraph({
         id: choose,
         key: "choose",
         name: "Ask which line and part",
-        blockType: ASK_LLM_BLOCK,
+        ...action(ASK_LLM_BLOCK),
         connectionId: aiConnectionId,
         config: { model, prompt: ASSIGNMENT_PROMPT, temperature: 0 },
         // Same reason as the extraction: a model behind a router queues.
@@ -467,7 +494,7 @@ export function purchaseOrderWorkflowGraph({
         id: resolve,
         key: "resolve",
         name: "Resolve it against the floor",
-        blockType: JSONATA_BLOCK,
+        ...action(JSONATA_BLOCK),
         config: {
           json: {
             lines: "{{steps.lines.output.lines}}",
@@ -481,15 +508,16 @@ export function purchaseOrderWorkflowGraph({
         id: matched,
         key: "matched",
         name: "Did it resolve to a real line?",
-        blockType: "core#branch",
-        config: { condition: "{{steps.resolve.output.line}}" },
+        ...action(BRANCH_BLOCK),
+        // The query answers {} when nothing matched, so `line` may be missing.
+        config: { operator: "EXISTS", left: "{{steps.resolve.output.line?}}" },
         position: { x: 3520, y: 0 },
       },
       {
         id: assign,
         key: "assignment",
         name: "Apply the line and part",
-        blockType: DISPATCH_BLOCK,
+        ...action(DISPATCH_BLOCK),
         config: {
           documentId: "{{steps.draft.output.documentId}}",
           documentType: LEDGER_TYPE,
@@ -528,7 +556,7 @@ export function purchaseOrderWorkflowGraph({
       // blocker and the run ends having still drafted and attached the scan.
       { id: randomUUID(), from: matched, to: assign, port: "true" },
     ],
-  };
+  });
 }
 
 
@@ -552,7 +580,7 @@ export function purchaseOrderWorkflowGraph({
 // the commitment and the approval carried it through, so there is no order to
 // create. The demo has no ERP, which is why this workflow exists — say that
 // out loud when demoing.
-export function orderBindingWorkflowGraph({ umhConnectionId }) {
+export function orderBindingWorkflowGraph({ umhConnectionId, reactor }) {
   const triggerId = randomUUID();
   const ledger = randomUUID();
   const bound = randomUUID();
@@ -561,10 +589,10 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
   const bind = randomUUID();
   const failed = randomUUID();
   const notRunnable = randomUUID();
-  return {
+  return bindReactor(reactor, {
     trigger: {
       id: triggerId,
-      blockType: DOCUMENT_EVENT_BLOCK,
+      ...trigger(DOCUMENT_EVENT_BLOCK),
       config: { documentType: LEDGER_TYPE, actionType: "APPROVE_ORDER" },
     },
     steps: [
@@ -572,7 +600,7 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
         id: ledger,
         key: "ledger",
         name: "Read the approved ledger",
-        blockType: GET_BLOCK,
+        ...action(GET_BLOCK),
         config: {
           documentId: "{{trigger.payload.documentId}}",
           documentType: LEDGER_TYPE,
@@ -583,10 +611,10 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
         id: bound,
         key: "bound",
         name: "Does it already name an order?",
-        blockType: "core#branch",
-        // Truthiness: BIND_ORDER_ID normalises a blank id to null, so an
-        // unbound ledger reads false here and takes the branch below.
-        config: { condition: "{{steps.ledger.output.state.orderId}}" },
+        ...action(BRANCH_BLOCK),
+        // BIND_ORDER_ID normalises a blank id to null, so an unbound ledger
+        // takes the false branch below.
+        config: { operator: "EXISTS", left: "{{steps.ledger.output.state.global.orderId}}" },
         position: { x: 640, y: 0 },
       },
       {
@@ -597,9 +625,9 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
         // approve without one. This is the same rule where it is enforced
         // rather than requested: the floor accepts an empty
         // line_instance_id and makes an order nothing can run.
-        blockType: "core#assert",
+        ...action(ASSERT_BLOCK),
         config: {
-          value: "{{steps.ledger.output.state.line}}",
+          value: "{{steps.ledger.output.state.global.line}}",
           message:
             "No production line is set on the ledger, so there is nothing to create the order on.",
         },
@@ -609,12 +637,12 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
         id: order,
         key: "order",
         name: "Create the order on the floor",
-        blockType: CREATE_ORDER_BLOCK,
+        ...action(CREATE_ORDER_BLOCK),
         connectionId: umhConnectionId,
         config: {
-          line_instance_id: "{{steps.ledger.output.state.line}}",
-          product_id: "{{steps.ledger.output.state.partNumber}}",
-          planned_qty: "{{steps.ledger.output.state.committedQuantity}}",
+          line_instance_id: "{{steps.ledger.output.state.global.line}}",
+          product_id: "{{steps.ledger.output.state.global.partNumber}}",
+          planned_qty: "{{steps.ledger.output.state.global.committedQuantity}}",
         },
         position: { x: 960, y: 120 },
       },
@@ -622,7 +650,7 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
         id: bind,
         key: "bind",
         name: "Bind the id and open the ledger",
-        blockType: DISPATCH_BLOCK,
+        ...action(DISPATCH_BLOCK),
         config: {
           documentId: "{{trigger.payload.documentId}}",
           documentType: LEDGER_TYPE,
@@ -649,7 +677,7 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
         id: failed,
         key: "failed",
         name: "Say why the order was not created",
-        blockType: DISPATCH_BLOCK,
+        ...action(DISPATCH_BLOCK),
         config: {
           documentId: "{{trigger.payload.documentId}}",
           documentType: LEDGER_TYPE,
@@ -671,7 +699,7 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
         id: notRunnable,
         key: "no-line",
         name: "Say there is no line to run it on",
-        blockType: DISPATCH_BLOCK,
+        ...action(DISPATCH_BLOCK),
         config: {
           documentId: "{{trigger.payload.documentId}}",
           documentType: LEDGER_TYPE,
@@ -695,5 +723,5 @@ export function orderBindingWorkflowGraph({ umhConnectionId }) {
       { id: randomUUID(), from: order, to: bind, port: "next" },
       { id: randomUUID(), from: order, to: failed, port: "error" },
     ],
-  };
+  });
 }

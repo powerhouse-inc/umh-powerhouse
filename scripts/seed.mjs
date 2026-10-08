@@ -6,7 +6,7 @@
 //
 // Idempotent by name: every step looks before it writes, so re-running it after
 // a restart is the intended mode. It never edits a workflow that already
-// exists — delete the document and re-run to rebuild one.
+// exists beyond its name, description and sidebar place — delete it to rebuild.
 //
 // Environment (defaults suit demo/docker-compose.yml + `ph vetra`):
 //   REACTOR_URL   http://localhost:4001
@@ -16,15 +16,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  DISPATCH_BLOCK,
-  FIND_BLOCK,
   floorWorkflowGraph,
-  LEDGER_TYPE,
   OPENROUTER_PIECE,
   PAPERLESS_PIECE,
   orderBindingWorkflowGraph,
   purchaseOrderWorkflowGraph,
-  TRIGGER_BLOCK,
   UMH_PIECE,
 } from "./graph.mjs";
 
@@ -76,7 +72,9 @@ const LEDGER_PACKAGE = "umh-production-ledger";
 // so there is one file rather than a sibling checkout's.
 const CONNECT_CONFIG = path.resolve(demoRoot, "..", "powerhouse.config.json");
 const CONNECTION_NAME = "UMH Factory Floor";
-const WORKFLOW_NAME = "Append floor progress to the evidence trail";
+const REACTOR_CONNECTOR_ID = "@powerhousedao/reactor#reactor";
+const REACTOR_READ_CONNECTION_NAME = "Reactor (read only)";
+const REACTOR_WRITE_CONNECTION_NAME = "Reactor";
 
 const PAPERLESS_URL = (process.env.PAPERLESS_URL ?? "http://localhost:18000").replace(/\/+$/, "");
 const PAPERLESS_USER = process.env.PAPERLESS_USER ?? "admin";
@@ -93,8 +91,30 @@ const AI_MODEL = process.env.PAPERLESS_AI_MODEL ?? "openai/gpt-oss-120b";
 const AI_API_KEY =
   process.env.PAPERLESS_AI_API_KEY ?? process.env.OPENROUTER_API_KEY ?? "";
 const AI_SECRET_NAME = "api_key";
-const PO_WORKFLOW_NAME = "Draft a ledger from a purchase order";
-const BINDING_WORKFLOW_NAME = "Create the floor order on approval";
+
+// The three workflows, top to bottom in Workflow Studio in the order an order
+// lives through them. `key` is the sidebar sort key of each one's home folder.
+const PO_WORKFLOW = {
+  key: "F",
+  name: "Initialize a ledger from a new purchase order",
+  formerName: "Draft a ledger from a purchase order",
+  description:
+    "When a purchase order lands in Paperless, extracts its commitment into a new DRAFT ledger, attaches the scan and proposes the floor line and part for review.",
+};
+const BINDING_WORKFLOW = {
+  key: "V",
+  name: "Create a floor order on purchase order approval",
+  formerName: "Create the floor order on approval",
+  description:
+    "When a reviewer approves a ledger, creates its order on the UMH floor, binds the order id and opens the ledger, or records why the order could not be created.",
+};
+const FLOOR_WORKFLOW = {
+  key: "k",
+  name: "Append floor progress to the ledger evidence trail",
+  formerName: "Append floor progress to the evidence trail",
+  description:
+    "Polls the UMH floor every 15 seconds and appends what it has counted for each order to the evidence trail of that order's OPEN ledger.",
+};
 
 const log = (message) => console.log(message);
 
@@ -520,37 +540,143 @@ async function ensureConnection(driveId) {
   return id;
 }
 
-// `createDocument(name:)` names the DOCUMENT; a workflow's own state.name is a
-// separate field that starts empty. The runtime stamps every run with
-// state.name, so leaving it unset is what made the workflow column blank in
-// Studio's run table while the drive listed the name perfectly well.
-async function ensureWorkflowName(id, name) {
+// What Workflow Studio makes for a reactor block: no secret, nothing to fill
+// in, so it is recorded OK as made. `access: "read"` refuses every write.
+async function ensureReactorConnection(driveId, name, access) {
+  const existing = (await childrenOf(driveId)).find(
+    (item) => item.documentType === "powerhouse/connection" && item.name === name,
+  );
+  if (existing) {
+    log(`connection "${name}" already exists (${existing.id})`);
+    return existing.id;
+  }
+  const created = await gql(
+    `mutation($name:String!,$parent:String) {
+       Connection { createDocument(name:$name, parentIdentifier:$parent) { id } } }`,
+    { name, parent: driveId },
+  );
+  const id = created.Connection.createDocument.id;
+  // One at a time: fields nested under Connection are not run in order.
+  const steps = [
+    ["setConnectionName", "SetConnectionNameInput", { name }],
+    ["setConnector", "SetConnectorInput", { connectorId: REACTOR_CONNECTOR_ID, authType: "REACTOR" }],
+    ["setConfig", "SetConfigInput", { config: access === "read" ? { endpoint: "local", access } : { endpoint: "local" } }],
+    ["recordCheckResult", "RecordCheckResultInput", { status: "OK", checkedAt: new Date().toISOString() }],
+  ];
+  for (const [operation, type, input] of steps) {
+    await gql(
+      `mutation($doc:PHID!,$input:Connection_${type}!) {
+         Connection { ${operation}(docId:$doc, input:$input) { id } } }`,
+      { doc: id, input },
+    );
+  }
+  log(`created connection "${name}" (${access}) (${id})`);
+  return id;
+}
+
+async function ensureReactorConnections(driveId) {
+  return {
+    read: await ensureReactorConnection(driveId, REACTOR_READ_CONNECTION_NAME, "read"),
+    write: await ensureReactorConnection(driveId, REACTOR_WRITE_CONNECTION_NAME, "write"),
+  };
+}
+
+// A document's whole state, for the parts no typed query here selects.
+async function documentState(id) {
+  const data = await gql(
+    `query($id:String!) { document(idOrSlug:$id) { document { state } } }`,
+    { id },
+  );
+  return data.document.document.state;
+}
+
+async function driveAction(driveId, operation, input) {
+  const type = `DocumentDrive_${operation[0].toUpperCase()}${operation.slice(1)}Input`;
   await gql(
-    `mutation($doc:PHID!,$input:Workflow_SetWorkflowNameInput!) {
-       Workflow { setWorkflowName(docId:$doc, input:$input) { id } } }`,
-    { doc: id, input: { name } },
+    `mutation($doc:PHID!,$input:${type}!) {
+       DocumentDrive { ${operation}(docId:$doc, input:$input) { id } } }`,
+    { doc: driveId, input },
   );
 }
 
-// Both workflows are published the same way; only the graph differs.
-async function publishWorkflow(driveId, name, graph) {
+// Workflow Studio orders workflows by a root "home" folder holding only that
+// workflow, named "<key> · <name>"; a workflow outside one sorts first.
+async function placeInHomeFolder(driveId, workflowId, workflow) {
+  const nodes = (await documentState(driveId)).global.nodes;
+  const node = nodes.find((item) => item.id === workflowId);
+  const folderName = `${workflow.key} · ${workflow.name}`;
+  if (node.name !== workflow.name) {
+    await driveAction(driveId, "updateNode", { id: workflowId, name: workflow.name });
+  }
+  const parent = nodes.find((item) => item.id === node.parentFolder);
+  const isHome =
+    parent?.kind === "folder" &&
+    !parent.parentFolder &&
+    nodes.filter((item) => item.parentFolder === parent.id).length === 1;
+  if (isHome) {
+    if (parent.name !== folderName) {
+      await driveAction(driveId, "updateNode", { id: parent.id, name: folderName });
+    }
+    return;
+  }
+  // A drive renames a duplicate folder, so an emptied home folder is reused.
+  const vacant = nodes.find(
+    (item) =>
+      item.kind === "folder" &&
+      !item.parentFolder &&
+      item.name === folderName &&
+      !nodes.some((child) => child.parentFolder === item.id),
+  );
+  const folderId = vacant?.id ?? randomUUID();
+  if (!vacant) {
+    await driveAction(driveId, "addFolder", { id: folderId, name: folderName, parentFolder: null });
+  }
+  await driveAction(driveId, "moveNode", { srcFolder: workflowId, targetParentFolder: folderId });
+}
+
+// The document name, state.name and the description are three fields; runs
+// are stamped with state.name, and Studio shows the description under it.
+async function describeWorkflow(id, workflow) {
+  await gql(
+    `mutation($doc:PHID!,$name:Workflow_SetWorkflowNameInput!,$description:Workflow_SetWorkflowDescriptionInput!) {
+       Workflow {
+         name: setWorkflowName(docId:$doc, input:$name) { id }
+         description: setWorkflowDescription(docId:$doc, input:$description) { id } } }`,
+    { doc: id, name: { name: workflow.name }, description: { description: workflow.description } },
+  );
+}
+
+async function ensureWorkflow(driveId, workflow, graph) {
   const existing = (await childrenOf(driveId)).find(
-    (item) => item.documentType === "powerhouse/workflow" && item.name === name,
+    (item) =>
+      item.documentType === "powerhouse/workflow" &&
+      (item.name === workflow.name || item.name === workflow.formerName),
   );
   if (existing) {
-    log(`workflow "${name}" already exists (${existing.id}) — delete it to rebuild`);
-    // The graph is left alone, but the name is cheap to put right: a workflow
-    // seeded before this was set records "" against every run it has since run.
-    await ensureWorkflowName(existing.id, name);
+    log(`workflow "${workflow.name}" already exists (${existing.id}) — delete it to rebuild`);
+    // The graph is left alone; its name, description and place are not.
+    if (existing.name !== workflow.name) {
+      await gql(
+        `mutation($doc:String!,$name:String!) { renameDocument(documentIdOrSlug:$doc, name:$name) { id } }`,
+        { doc: existing.id, name: workflow.name },
+      );
+      log(`  renamed from "${existing.name}"`);
+    }
+    await describeWorkflow(existing.id, workflow);
+    await placeInHomeFolder(driveId, existing.id, workflow);
+    if (!(await documentState(existing.id)).global.published) {
+      log(`  it has never been published, so it does not run — delete it and re-run this`);
+    }
     return existing.id;
   }
   const created = await gql(
     `mutation($name:String!,$parent:String) {
        Workflow { createDocument(name:$name, parentIdentifier:$parent) { id } } }`,
-    { name, parent: driveId },
+    { name: workflow.name, parent: driveId },
   );
   const id = created.Workflow.createDocument.id;
-  await ensureWorkflowName(id, name);
+  await placeInHomeFolder(driveId, id, workflow);
+  await describeWorkflow(id, workflow);
   await gql(
     `mutation($doc:PHID!,$input:Workflow_SetTriggerInput!) {
        Workflow { setTrigger(docId:$doc, input:$input) { id } } }`,
@@ -570,15 +696,20 @@ async function publishWorkflow(driveId, name, graph) {
       { doc: id, input: edge },
     );
   }
-  // Last, deliberately: only an ENABLED workflow registers a trigger instance,
-  // and a half-built graph that starts polling — or registers a webhook with
-  // paperless — would run against missing steps.
+  // Runs execute the published snapshot, never the draft, and only a
+  // published workflow can be enabled.
+  await gql(
+    `mutation($doc:PHID!,$input:Workflow_PublishWorkflowInput!) {
+       Workflow { publishWorkflow(docId:$doc, input:$input) { id } } }`,
+    { doc: id, input: { publishedAt: new Date().toISOString() } },
+  );
+  // Last: only an ENABLED workflow arms its trigger.
   await gql(
     `mutation($doc:PHID!,$input:Workflow_SetWorkflowStatusInput!) {
        Workflow { setWorkflowStatus(docId:$doc, input:$input) { id } } }`,
     { doc: id, input: { status: "ENABLED" } },
   );
-  log(`created workflow "${name}" (${id}) — ${graph.steps.length} steps, ENABLED`);
+  log(`created workflow "${workflow.name}" (${id}) — ${graph.steps.length} steps, published, ENABLED`);
   return id;
 }
 
@@ -586,13 +717,14 @@ await waitForReactor();
 await checkFloor();
 const ledgerDrive = await ensureDrive(LEDGER_DRIVE);
 const workflowDrive = await ensureDrive(WORKFLOW_DRIVE);
+const reactor = await ensureReactorConnections(workflowDrive.id);
 
 // Track A — the floor.
 const umhConnectionId = await ensureConnection(workflowDrive.id);
-const floorWorkflowId = await publishWorkflow(
+const floorWorkflowId = await ensureWorkflow(
   workflowDrive.id,
-  WORKFLOW_NAME,
-  floorWorkflowGraph(umhConnectionId),
+  FLOOR_WORKFLOW,
+  floorWorkflowGraph(umhConnectionId, reactor),
 );
 
 // Track B — the purchase order. Paperless first, because the connection needs
@@ -601,9 +733,9 @@ const token = await paperlessToken();
 const documentTypeId = await ensureDocumentType(token);
 const paperlessConnectionId = await ensurePaperlessConnection(workflowDrive.id, token);
 const aiConnectionId = await ensureAiConnection(workflowDrive.id);
-const poWorkflowId = await publishWorkflow(
+const poWorkflowId = await ensureWorkflow(
   workflowDrive.id,
-  PO_WORKFLOW_NAME,
+  PO_WORKFLOW,
   purchaseOrderWorkflowGraph({
     paperlessConnectionId,
     aiConnectionId,
@@ -611,15 +743,16 @@ const poWorkflowId = await publishWorkflow(
     ledgerDriveId: ledgerDrive.id,
     documentTypeId,
     model: AI_MODEL,
+    reactor,
   }),
 );
 
 // Track C — the approval. The editor dispatches APPROVE_ORDER and this
 // creates the floor order the ledger then opens against.
-const bindingWorkflowId = await publishWorkflow(
+const bindingWorkflowId = await ensureWorkflow(
   workflowDrive.id,
-  BINDING_WORKFLOW_NAME,
-  orderBindingWorkflowGraph({ umhConnectionId }),
+  BINDING_WORKFLOW,
+  orderBindingWorkflowGraph({ umhConnectionId, reactor }),
 );
 
 configureConnect([workflowDrive, ledgerDrive]);
@@ -633,10 +766,12 @@ Seeded.
   connections     ${umhConnectionId}  ${CONNECTION_NAME}
                   ${paperlessConnectionId}  ${PAPERLESS_CONNECTION_NAME}
                   ${aiConnectionId}  ${AI_CONNECTION_NAME}${AI_API_KEY ? "" : "  <- needs an API key"}
+                  ${reactor.read}  ${REACTOR_READ_CONNECTION_NAME}
+                  ${reactor.write}  ${REACTOR_WRITE_CONNECTION_NAME}
 
-  workflows       ${floorWorkflowId}  ${WORKFLOW_NAME}
-                  ${poWorkflowId}  ${PO_WORKFLOW_NAME}
-                  ${bindingWorkflowId}  ${BINDING_WORKFLOW_NAME}
+  workflows       ${poWorkflowId}  ${PO_WORKFLOW.name}
+                  ${bindingWorkflowId}  ${BINDING_WORKFLOW.name}
+                  ${floorWorkflowId}  ${FLOOR_WORKFLOW.name}
 
 Connect opens both drives on its next load: ph vetra merges
 connect.drives.defaultDrives with the Vetra drive rather than replacing it, and

@@ -80,7 +80,7 @@ services:
     # older line fails supergraph composition, leaves the gateway with no query
     # root, and switchboard crash-loops. Tags are v-PREFIXED; a bare 6.2.2 fails
     # with "artifact not found".
-    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.3-dev.21}
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.3-dev.49}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
@@ -147,7 +147,7 @@ services:
 
   connect:
     # Same reactor line as switchboard -- Connect loads the same packages.
-    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.3-dev.21}
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.3-dev.49}
     restart: unless-stopped
     depends_on:
       switchboard:
@@ -210,6 +210,10 @@ services:
       PAPERLESS_PASSWORD: paperless
       PAPERLESS_AI_API_KEY: ${PAPERLESS_AI_API_KEY}
       PAPERLESS_AI_MODEL: ${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
+      # The versions the workflows pin their blocks to: the runtime's, for the
+      # pieces built into it, and the ledger package's, for the UMH piece.
+      PH_IMAGE_TAG: ${PH_IMAGE_TAG:-v6.2.3-dev.49}
+      UMH_LEDGER_VERSION: ${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}
     command: ["node", "/seed/seed.mjs"]
 
   # ── UMH factory core (vendored --fixed-demo deployment) ─────────────────
@@ -316,7 +320,7 @@ services:
       - DEFAULT_POOL_SIZE=40
       - MAX_CLIENT_CONN=200
     ports:
-      - "5432:5432"
+      - "${PGBOUNCER_HOST_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h pgbouncer"]
       interval: 10s
