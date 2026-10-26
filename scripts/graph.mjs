@@ -430,6 +430,10 @@ export function purchaseOrderWorkflowGraph({
           // The gate, enforced rather than requested.
           allowedActions: "SET_COMMITMENT",
           actions: "{{steps.extract.output}}",
+          // The model may write prose around its JSON (reasoning models like
+          // gpt-oss often start "We need to…"). "exact", the default, rejects
+          // that; "extract" reads the actions out of the answer.
+          parse: "extract",
         },
         position: { x: 1600, y: 0 },
       },
