@@ -276,6 +276,16 @@ if [ "$code" != "0" ]; then
 fi
 say "==> Seeding complete"
 
+# ── Email intake (optional) ─────────────────────────────────────────────────
+# Off unless PAPERLESS_MAIL_ENABLED=true in .env; with it off this only makes
+# sure Paperless is not checking a mailbox. A failure is a warning, not an
+# error: dropping or uploading PDFs works without email.
+say "==> Email intake"
+if ! docker compose run --rm --no-deps mail-setup; then
+  say "WARNING: email intake is not set up -- the reason is above. The rest of the demo works without it."
+  say "         Fix the PAPERLESS_MAIL_* settings in .env, then: docker compose run --rm mail-setup"
+fi
+
 # ── Post-condition: the ledger package actually composed into the supergraph ──
 schema=$(curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"query":"{ __schema { types { name } } }"}' \
@@ -314,7 +324,11 @@ cat <<SUMMARY
   attached. Review, approve (creates the floor order), open the ledger,
   and watch the evidence trail fill from the machines.
 
+  With PAPERLESS_MAIL_ENABLED=true in .env, a PDF attached to mail with
+  the Gmail label "${PAPERLESS_MAIL_FOLDER:-paperless}" works the same way (see the README).
+
     docker compose logs -f switchboard   # the workflows' runs
     docker compose down                  # stop   (-v wipes everything)
     docker compose run --rm seed         # re-run the seed
+    docker compose run --rm mail-setup   # apply the email settings in .env
 SUMMARY

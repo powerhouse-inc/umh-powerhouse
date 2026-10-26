@@ -50,6 +50,10 @@ cp .env.example .env    # fill in PAPERLESS_AI_API_KEY and UMH_LEDGER_VERSION
 First run pulls ~3 GB. When it finishes it opens Paperless and the PL
 Dashboard drive in Connect.
 
+To also accept purchase orders by email, see
+[Purchase orders by email](#purchase-orders-by-email-optional). It is off by
+default and the demo does not need it.
+
 
 | Service                            | Endpoint                                                                                  |
 | ---------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -65,7 +69,9 @@ Dashboard drive in Connect.
 ## The demo walk
 
 1. Drop one of the sample POs (bundled in [`demo-pdfs/`](demo-pdfs/)) into `.local/consume/`, or upload it at the Paperless UI. It must
-   contain the word "order".
+   contain the word "order". With [email intake](#purchase-orders-by-email-optional)
+   on, you can also email it as a PDF attachment and give the mail the Gmail
+   label `paperless`.
 2. After OCR, the forked paperless-sync engine extracts the commitment into a
   **DRAFT Production Ledger** in the PL Dashboard drive, with the original
    scan attached — open the ledger and click **View Order PDF** to verify the
@@ -82,15 +88,124 @@ Dashboard drive in Connect.
 
 
 
+## Purchase orders by email (optional)
+
+Off by default. When it is on, Paperless checks a Gmail label every minute for
+new mail and imports its PDF attachments. An emailed PDF becomes the same
+Paperless document as a dropped one, so it goes through the same steps from
+there. Dropping and uploading PDFs keep working whether email is on or off.
+
+It works with personal Gmail and with Google Workspace (company) accounts.
+
+### 1. Create a Google app password
+
+Paperless signs in to Gmail over IMAP, and Google does not accept the
+account's normal password for that. It needs an app password: a 16-letter
+password that only this app uses and that you can revoke on its own.
+
+1. Sign in to the Google account that receives the purchase orders and open
+   [myaccount.google.com/security](https://myaccount.google.com/security).
+   Under **How you sign in to Google**, turn on **2-Step Verification**. App
+   passwords need it.
+2. Open [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+   (or type "App passwords" into the search bar at the top of your Google
+   Account page).
+3. Enter a name such as `Paperless demo` and click **Create**.
+4. Copy the 16-letter password Google shows. You only see it once; if you lose
+   it, delete it and create a new one.
+
+If the page says *"The setting you are looking for is not available for your
+account"*, app passwords are blocked for this account. Either 2-Step
+Verification is off, or the account uses Advanced Protection (security keys
+only), or on a Workspace account the admin has disabled app passwords or IMAP.
+On a company account, ask your Google Workspace admin to allow both.
+
+To revoke Paperless's access, delete the app password on the same page.
+Changing the account's Google password revokes all its app passwords as well.
+
+### 2. Create the Gmail label
+
+In Gmail, create a label named `paperless` (left sidebar → **Labels** → **+**).
+Paperless only reads mail with this label, so nothing else in the mailbox is
+imported. Apply it to a purchase-order mail by hand, or create a Gmail filter
+that applies it automatically, for example to mail from a supplier with a PDF
+attached.
+
+### 3. Put the settings in `.env`
+
+```bash
+PAPERLESS_MAIL_ENABLED=true
+PAPERLESS_MAIL_ADDRESS=you@company.com
+PAPERLESS_MAIL_APP_PASSWORD=abcdefghijklmnop   # the app password, without spaces
+```
+
+`.env` is in `.gitignore`. Never put the password in `.env.example` or
+`docker-compose.yml`. The optional settings (another label name, sender or
+subject filters, how far back to look, how often to check, a non-Gmail IMAP
+server) are listed in [`.env.example`](.env.example).
+
+### 4. Apply it
+
+Run `./start.sh`. On a stack that is already running, this is enough:
+
+```bash
+docker compose run --rm mail-setup
+```
+
+It checks the login first and stops with a clear message if Google rejects it.
+On success it prints `email intake: on …`. To test it, email yourself a PDF from
+[`demo-pdfs/`](demo-pdfs/) and give the mail the `paperless` label. Within a
+minute the PDF appears in Paperless, and the DRAFT ledger follows once it has
+been read and extracted.
+
+### How it behaves
+
+- **Only PDF attachments are imported.** The mail text is not: this stack runs
+  Paperless without Tika and Gotenberg, which it would need to turn an email
+  body into a document.
+- **Each mail is imported once.** Afterwards Gmail shows a second label on it,
+  `paperless-imported`, and Paperless skips mail that has it. Only mail from
+  the last 7 days is read, so turning it on does not import your whole history.
+- **Every PDF in the label becomes a Purchase Order**, even one that never
+  contains the word "order" (a German *Bestellung*, say). The label is the
+  signal, so only label purchase orders.
+- **To turn it off**, set `PAPERLESS_MAIL_ENABLED=false` and run `./start.sh`
+  again. The rule is disabled and Paperless stops logging in to the mailbox.
+  The app password stays stored in Paperless until `docker compose down -v`.
+  Delete it at Google if Paperless should lose access completely.
+- **Already added the mailbox by hand** in Paperless (under **Mail**)? The
+  script takes over the account with the same address instead of adding a
+  second one. A rule you created by hand stays enabled; disable it if it reads
+  the same mail, or each PDF is imported twice. The script warns when it finds
+  one.
+
+### Troubleshooting
+
+Paperless logs every mail check. Open **Logs → mail** in the Paperless UI, or:
+
+```bash
+docker compose exec webserver tail -n 30 /usr/src/paperless/data/log/mail.log
+```
+
+| Log says | Fix |
+| --- | --- |
+| `Folder paperless does not exist` | Create the Gmail label, spelled as in `PAPERLESS_MAIL_FOLDER` |
+| `Processed 0 matching mail(s)` | The mail lacks the label, is older than 7 days, has no PDF, or was already imported |
+| `refused the login` (from `mail-setup`) | Use an app password, not the normal one; on Workspace, ask the admin to allow app passwords and IMAP |
+
 ## Layout
 
 - `docker-compose.yml` — everything: Paperless (redis + webserver), Powerhouse
 (switchboard + connect images, packages installed from the registry at
-startup), one-shot `bootstrap`, and the vendored UMH factory core
-(simulator, umh-core, TimescaleDB, pgbouncer, nginx).
-- `scripts/bootstrap.py` — idempotent wiring: Paperless "Purchase Order" type,
-the `pl-dashboard` drive, the sync document, the mapping with UMH extraction
-instructions (including the human-gate guard), webhook registration healing.
+startup), the one-shots `seed` and `mail-setup`, and the vendored UMH factory
+core (simulator, umh-core, TimescaleDB, pgbouncer, nginx).
+- `scripts/seed.mjs`, `scripts/graph.mjs` — idempotent wiring, copied from the
+ledger package's demo (`demo/scripts/` in umh-production-ledger): the Paperless
+"Purchase Order" type, the drives, the connections and the workflows that do
+the integration.
+- `scripts/paperless-mail.mjs` — optional email intake: applies the
+`PAPERLESS_MAIL_*` settings in `.env` to Paperless's mail account and rule, or
+disables the rule. Maintained here, not upstream.
 - `umh-factory/` — vendored from a v1.4.0 `--fixed-demo` deployment of
 [umh-factory-demo](https://github.com/united-manufacturing-hub/umh-factory-demo):
 umh-core config (with the costs-api dataflow), simulator config, nginx

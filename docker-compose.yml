@@ -64,6 +64,10 @@ services:
       PAPERLESS_CONVERT_MEMORY_LIMIT: "1024"
       PAPERLESS_WORKER_TIMEOUT: "3600"
       PAPERLESS_AI_ENABLED: "false"
+      # How often Paperless checks mail. Its default is every 10 minutes; a
+      # minute suits a demo. An account with no enabled rule is skipped, so
+      # with email intake off this never logs in anywhere.
+      PAPERLESS_EMAIL_TASK_CRON: "${PAPERLESS_MAIL_CHECK_CRON:-* * * * *}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/"]
       interval: 10s
@@ -215,6 +219,36 @@ services:
       PH_IMAGE_TAG: ${PH_IMAGE_TAG:-v6.2.3-dev.49}
       UMH_LEDGER_VERSION: ${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}
     command: ["node", "/seed/seed.mjs"]
+
+  # Optional email intake, idempotent like the seed. Points Paperless's own
+  # mail fetcher at a Gmail label when PAPERLESS_MAIL_ENABLED=true, and
+  # disables it otherwise. Paperless reads mail accounts only from its
+  # database, so this is what applies the PAPERLESS_MAIL_* settings in .env.
+  mail-setup:
+    image: docker.io/library/node:24-alpine
+    restart: "no"
+    depends_on:
+      webserver:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/seed:ro
+    environment:
+      PAPERLESS_URL: http://webserver:8000
+      PAPERLESS_USER: admin
+      PAPERLESS_PASSWORD: paperless
+      PAPERLESS_MAIL_ENABLED: ${PAPERLESS_MAIL_ENABLED:-false}
+      PAPERLESS_MAIL_ADDRESS: ${PAPERLESS_MAIL_ADDRESS:-}
+      PAPERLESS_MAIL_APP_PASSWORD: ${PAPERLESS_MAIL_APP_PASSWORD:-}
+      PAPERLESS_MAIL_FOLDER: ${PAPERLESS_MAIL_FOLDER:-paperless}
+      PAPERLESS_MAIL_DONE_LABEL: ${PAPERLESS_MAIL_DONE_LABEL:-paperless-imported}
+      PAPERLESS_MAIL_FROM: ${PAPERLESS_MAIL_FROM:-}
+      PAPERLESS_MAIL_SUBJECT: ${PAPERLESS_MAIL_SUBJECT:-}
+      PAPERLESS_MAIL_MAX_AGE_DAYS: ${PAPERLESS_MAIL_MAX_AGE_DAYS:-7}
+      PAPERLESS_MAIL_IMAP_SERVER: ${PAPERLESS_MAIL_IMAP_SERVER:-imap.gmail.com}
+      PAPERLESS_MAIL_IMAP_PORT: ${PAPERLESS_MAIL_IMAP_PORT:-993}
+      PAPERLESS_MAIL_IMAP_SECURITY: ${PAPERLESS_MAIL_IMAP_SECURITY:-}
+      PAPERLESS_MAIL_CHECK_CRON: "${PAPERLESS_MAIL_CHECK_CRON:-* * * * *}"
+    command: ["node", "/seed/paperless-mail.mjs"]
 
   # ── UMH factory core (vendored --fixed-demo deployment) ─────────────────
   machine-simulator:
