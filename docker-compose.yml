@@ -79,12 +79,12 @@ services:
   # package (document models, editors, umh-order-poller processor, forked
   # paperless-sync processor + webhook subgraph) at startup from the registry.
   switchboard:
-    # v6.2.2 is the production reactor line the ledger package was built against
-    # (document-model and @powerhousedao/reactor-browser peer deps are 6.2.2). An
-    # older line fails supergraph composition, leaves the gateway with no query
-    # root, and switchboard crash-loops. Tags are v-PREFIXED; a bare 6.2.2 fails
-    # with "artifact not found".
-    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.3-dev.49}
+    # Must match the reactor line the ledger package was built against (its
+    # document-model and @powerhousedao/reactor-browser peer deps, 6.2.3-dev.67
+    # for 0.0.12). A mismatch fails supergraph composition or leaves Connect
+    # unable to open the ledger editor. Tags are v-PREFIXED; a bare 6.2.3-dev.67
+    # fails with "artifact not found".
+    image: cr.vetra.io/powerhouse-inc-powerhouse/switchboard:${PH_IMAGE_TAG:-v6.2.3-dev.67}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SWITCHBOARD_HOST_PORT:-4001}:3000"
@@ -120,6 +120,10 @@ services:
       # The origin the paperless piece registers as its webhook target. Both
       # ends are containers here, so this is the service name, not the host.
       - PUBLIC_URL=http://switchboard:3000
+      # Signs the short-lived URLs Connect downloads attachments (the order
+      # PDFs) from. In production mode (this image) the reactor refuses every
+      # attachment download until it is set: 32+ characters, no spaces.
+      - PH_ATTACHMENT_URL_SIGNING_SECRET=${PH_ATTACHMENT_URL_SIGNING_SECRET:-local-dev-attachment-signing-secret-not-for-production}
       # ---- read by the forked paperless-sync processor, kept for reference ----
       # Nothing creates a paperless-sync document any more, so the processor
       # never activates; the extraction is a workflow step against OpenRouter.
@@ -151,7 +155,7 @@ services:
 
   connect:
     # Same reactor line as switchboard -- Connect loads the same packages.
-    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.3-dev.49}
+    image: cr.vetra.io/powerhouse-inc-powerhouse/connect:${PH_IMAGE_TAG:-v6.2.3-dev.67}
     restart: unless-stopped
     depends_on:
       switchboard:
@@ -216,7 +220,7 @@ services:
       PAPERLESS_AI_MODEL: ${PAPERLESS_AI_MODEL:-openai/gpt-oss-120b}
       # The versions the workflows pin their blocks to: the runtime's, for the
       # pieces built into it, and the ledger package's, for the UMH piece.
-      PH_IMAGE_TAG: ${PH_IMAGE_TAG:-v6.2.3-dev.49}
+      PH_IMAGE_TAG: ${PH_IMAGE_TAG:-v6.2.3-dev.67}
       UMH_LEDGER_VERSION: ${UMH_LEDGER_VERSION:?set UMH_LEDGER_VERSION in .env}
     command: ["node", "/seed/seed.mjs"]
 
